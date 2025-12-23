@@ -26,6 +26,7 @@ venv/
 # Data/artifacts (local)
 data/
 AL_D001_00_20251204/
+llm_payloads/
 
 # Logs
 *.log

@@ -9,7 +9,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
-from fastapi import FastAPI, Form
+from fastapi import BackgroundTasks, FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from services.llm_mapper import dump_mapper_payload, llm_map_query
@@ -23,6 +23,7 @@ from services.insight_builder import (
     build_global_baseline,
     build_insight_payload,
 )
+from tools.mcp_assistant import map_request_to_query, store_query_vector_cache
 
 DSN = os.getenv("MCP_DB_DSN", "postgresql://mcp:mcp@localhost:5432/mcp")
 
@@ -564,8 +565,34 @@ def query(q: str = Form(...)) -> str:
 
 
 @app.post("/mapping", response_class=HTMLResponse)
-def mapping(q: str = Form(...)) -> str:
+def mapping(q: str = Form(...), background_tasks: BackgroundTasks = None) -> str:
+    parser_model = os.getenv("MCP_PARSER_MODEL", "gemini")
+    mapping_query, meta = map_request_to_query(
+        q,
+        parser_model=parser_model,
+        return_meta=True,
+        store_cache=False,
+        validate_schema=False,
+    )
     path = dump_mapper_payload(q)
+    if (
+        background_tasks
+        and meta.get("query_generated")
+        and meta.get("embedding")
+        and meta.get("parser_template")
+    ):
+        background_tasks.add_task(
+            store_query_vector_cache,
+            q,
+            parser_model,
+            meta["parser_template"],
+            meta["embedding"],
+            mapping_query,
+        )
+    mapping_json = json.dumps(mapping_query, ensure_ascii=False, indent=2)
+    cache_info = f"{meta.get('cache_source')}"
+    if meta.get("vector_similarity") is not None:
+        cache_info += f" (sim={meta.get('vector_similarity'):.3f})"
     return f"""
     <html>
       <head>
@@ -581,10 +608,54 @@ def mapping(q: str = Form(...)) -> str:
         <pre>{html.escape(str(path))}</pre>
         <h3>원문 질의</h3>
         <pre>{html.escape(q)}</pre>
+        <h3>캐시</h3>
+        <pre>{html.escape(cache_info)}</pre>
+        <h3>매핑 결과</h3>
+        <pre>{html.escape(mapping_json)}</pre>
         <p><a href="/">돌아가기</a></p>
       </body>
     </html>
     """
+
+
+@app.post("/mapping.json")
+def mapping_json(q: str = Form(...), background_tasks: BackgroundTasks = None) -> JSONResponse:
+    parser_model = os.getenv("MCP_PARSER_MODEL", "gemini")
+    mapping_query, meta = map_request_to_query(
+        q,
+        parser_model=parser_model,
+        return_meta=True,
+        store_cache=False,
+        validate_schema=False,
+    )
+    path = dump_mapper_payload(q)
+    if (
+        background_tasks
+        and meta.get("query_generated")
+        and meta.get("embedding")
+        and meta.get("parser_template")
+    ):
+        background_tasks.add_task(
+            store_query_vector_cache,
+            q,
+            parser_model,
+            meta["parser_template"],
+            meta["embedding"],
+            mapping_query,
+        )
+    meta_public = {
+        key: value
+        for key, value in meta.items()
+        if key not in {"embedding", "parser_template"}
+    }
+    return JSONResponse(
+        {
+            "request": q,
+            "query": mapping_query,
+            "cache": meta_public,
+            "dump_path": str(path),
+        }
+    )
 
 
 @app.post("/query.json")

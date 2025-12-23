@@ -56,7 +56,7 @@ def dump_mapper_payload(text: str) -> Path:
     return _dump_payload("mapper", payload, prompt)
 
 
-def llm_map_query(text: str) -> Dict[str, Any]:
+def llm_map_query(text: str, *, dump: bool = True) -> Dict[str, Any]:
     api_key = os.getenv("MCP_GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("MCP_GEMINI_API_KEY가 필요합니다.")
@@ -68,7 +68,8 @@ def llm_map_query(text: str) -> Dict[str, Any]:
 
     prompt = build_mapper_prompt(text)
     payload = build_mapper_payload(prompt)
-    _dump_payload("mapper", payload, prompt)
+    if dump:
+        _dump_payload("mapper", payload, prompt)
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         endpoint,
