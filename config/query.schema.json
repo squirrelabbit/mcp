@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Query",
+  "type": "object",
+  "required": ["target"],
+  "properties": {
+    "target": {
+      "type": "string",
+      "description": "MCP 의미축 경로 (예: population.foot_traffic)."
+    },
+    "aggregations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["sum", "avg", "min", "max", "median", "count"]
+      }
+    },
+    "filters": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "object",
+          "properties": {
+            "start": {"type": "string", "format": "date"},
+            "end": {"type": "string", "format": "date"},
+            "month": {"type": "integer", "minimum": 1, "maximum": 12},
+            "weekdays": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "spatial": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "demographics": {
+          "type": "object",
+          "properties": {
+            "age": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "gender": {
+              "type": "array",
+              "items": {"type": "string", "enum": ["male", "female"]}
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "group_by": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "compare": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string", "enum": ["yoy", "mom", "dod", "custom"]},
+        "interval": {"type": "string", "description": "예: 1y, 1m, 7d"}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

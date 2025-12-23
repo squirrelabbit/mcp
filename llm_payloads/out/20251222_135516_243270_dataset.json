@@ -1,0 +1,18 @@
+{
+  "prompt": "\n다음은 데이터베이스 요약 정보다. 사용자가 이해하기 쉬운 한국어 한두 문장으로 요약하라.\n형식: \"현재 DB는 [기간], [지역/소스 특성] 데이터입니다.\"\n{\"date_min\": \"2022-09-01\", \"date_max\": \"2025-06-01\", \"top_spatial\": [{\"label\": \"신관동\", \"count\": 78}, {\"label\": \"금성동\", \"count\": 35}, {\"label\": \"유구읍\", \"count\": 16}, {\"label\": \"옥룡동\", \"count\": 14}, {\"label\": \"봉황동\", \"count\": 12}, {\"label\": \"우성면\", \"count\": 12}, {\"label\": \"계룡면\", \"count\": 11}, {\"label\": \"금학동\", \"count\": 11}, {\"label\": \"의당면\", \"count\": 10}, {\"label\": \"정안면\", \"count\": 9}], \"sources\": [{\"source\": \"telco_grid\", \"count\": 2724}, {\"source\": \"sales\", \"count\": 264}, {\"source\": \"telco\", \"count\": 1}]}\n",
+  "payload": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "\n다음은 데이터베이스 요약 정보다. 사용자가 이해하기 쉬운 한국어 한두 문장으로 요약하라.\n형식: \"현재 DB는 [기간], [지역/소스 특성] 데이터입니다.\"\n{\"date_min\": \"2022-09-01\", \"date_max\": \"2025-06-01\", \"top_spatial\": [{\"label\": \"신관동\", \"count\": 78}, {\"label\": \"금성동\", \"count\": 35}, {\"label\": \"유구읍\", \"count\": 16}, {\"label\": \"옥룡동\", \"count\": 14}, {\"label\": \"봉황동\", \"count\": 12}, {\"label\": \"우성면\", \"count\": 12}, {\"label\": \"계룡면\", \"count\": 11}, {\"label\": \"금학동\", \"count\": 11}, {\"label\": \"의당면\", \"count\": 10}, {\"label\": \"정안면\", \"count\": 9}], \"sources\": [{\"source\": \"telco_grid\", \"count\": 2724}, {\"source\": \"sales\", \"count\": 264}, {\"source\": \"telco\", \"count\": 1}]}\n"
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "temperature": 0.2
+    }
+  }
+}

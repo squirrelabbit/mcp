@@ -1,0 +1,12 @@
+{
+  "target": "population.foot_traffic",
+  "filters": {
+    "time": {
+      "month": 12
+    },
+    "spatial": []
+  },
+  "aggregations": [
+    "avg"
+  ]
+}

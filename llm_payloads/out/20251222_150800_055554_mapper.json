@@ -1,0 +1,18 @@
+{
+  "prompt": "\n너는 한국어 질의를 SQL 조회 파라미터로 변환한다.\n다음 JSON 스키마로만 응답하라. 다른 텍스트는 금지.\n{\n  \"qtype\": \"trend|yoy|demographics\",\n  \"level\": \"emd|sig|sido\",\n  \"spatial_label\": \"지명 또는 null\",\n  \"spatial_key\": \"코드 또는 null\",\n  \"date_start\": \"YYYY-MM or YYYY-MM-DD or null\",\n  \"date_end\": \"YYYY-MM or YYYY-MM-DD or null\",\n  \"view\": \"v_activity_monthly_trend_norm|v_activity_monthly_trend_sig|v_activity_monthly_trend_sido|v_activity_yoy|v_demographics_share\"\n}\n질의: 전체 데이터 경향 알려줘\n",
+  "payload": {
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "\n너는 한국어 질의를 SQL 조회 파라미터로 변환한다.\n다음 JSON 스키마로만 응답하라. 다른 텍스트는 금지.\n{\n  \"qtype\": \"trend|yoy|demographics\",\n  \"level\": \"emd|sig|sido\",\n  \"spatial_label\": \"지명 또는 null\",\n  \"spatial_key\": \"코드 또는 null\",\n  \"date_start\": \"YYYY-MM or YYYY-MM-DD or null\",\n  \"date_end\": \"YYYY-MM or YYYY-MM-DD or null\",\n  \"view\": \"v_activity_monthly_trend_norm|v_activity_monthly_trend_sig|v_activity_monthly_trend_sido|v_activity_yoy|v_demographics_share\"\n}\n질의: 전체 데이터 경향 알려줘\n"
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "temperature": 0.2
+    }
+  }
+}
