@@ -1,5 +1,6 @@
 # normalization/missing_field_handler.py
 
+
 class MissingFieldHandler:
     def fill(self, record):
         record.setdefault("population", {})

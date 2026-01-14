@@ -6,7 +6,6 @@ from metrics.config_registry import DOMAIN_CONFIG
 
 
 class MetricsEngine:
-
     def __init__(self):
         self.core = MetricsCore()
         self.baseline_engine = BaselineEngine()
@@ -33,12 +32,18 @@ class MetricsEngine:
             if metric_name == "uplift":
                 results["uplift"] = self.core.uplift(current_value, baseline)
             elif metric_name == "volatility":
-                volatility_series = history + ([current_value] if current_value is not None else [])
+                volatility_series = history + (
+                    [current_value] if current_value is not None else []
+                )
                 results["volatility"] = (
-                    self.core.volatility(volatility_series) if len(volatility_series) >= 2 else None
+                    self.core.volatility(volatility_series)
+                    if len(volatility_series) >= 2
+                    else None
                 )
             elif metric_name == "rate_of_change":
-                results["rate_of_change"] = self.core.rate_of_change(previous_value, current_value)
+                results["rate_of_change"] = self.core.rate_of_change(
+                    previous_value, current_value
+                )
 
         return results
 

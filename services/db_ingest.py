@@ -10,6 +10,7 @@ import pandas as pd
 
 from config.domain_schema import DOMAIN_INPUT_SCHEMA
 from domain.telco_grid_module import TelcoGridDomainModule
+from domain.sungnam_service_module import SungnamServiceDomainModule
 from loaders.csv_loader import CSVLoader
 from services.lake_writer import LakeWriter
 from utils.domain_loader import collect_files
@@ -48,6 +49,7 @@ class DBIngestor:
         sales_patterns: List[str],
         telco_patterns: List[str],
         telco_grid_patterns: List[str],
+        sungnam_patterns: List[str],
         *,
         chunksize: int = 200_000,
     ) -> None:
@@ -76,7 +78,39 @@ class DBIngestor:
             self.ingest_telco_grid(new_telco_grid_files, chunksize=chunksize)
             self._mark_files_ingested("telco_grid", new_telco_grid_files)
         elif telco_grid_files:
-            print(f"[db] ingest telco_grid: no new files (total {len(telco_grid_files)})")
+            print(
+                f"[db] ingest telco_grid: no new files (total {len(telco_grid_files)})"
+            )
+
+        sungnam_files = collect_files(sungnam_patterns, data_sources)
+        new_sungnam_files = self._filter_new_files("sungnam_service", sungnam_files)
+        if new_sungnam_files:
+            print(f"[db] ingest sungnam: {len(new_sungnam_files)} new files")
+            self.ingest_sungnam(new_sungnam_files, chunksize=chunksize)
+            self._mark_files_ingested("sungnam_service", new_sungnam_files)
+        elif sungnam_files:
+            print(f"[db] ingest sungnam: no new files (total {len(sungnam_files)})")
+
+    def ingest_sungnam(self, files: List[Path], *, chunksize: int = 200_000) -> None:
+        loader = CSVLoader()
+        module = SungnamServiceDomainModule()
+        handlers = {
+            "inflow": self._ingest_sungnam_inflow,
+            "sex_age": self._ingest_sungnam_sex_age,
+            "pcell_sex_age": self._ingest_sungnam_pcell_sex_age,
+            "pcell": self._ingest_sungnam_pcell,
+            "unique": self._ingest_sungnam_unique,
+        }
+        for path in files:
+            table_key = module.detect_table(path.name)
+            if not table_key:
+                print(f"[db] sungnam skip: {path.name}")
+                continue
+            handler = handlers.get(table_key)
+            if not handler:
+                print(f"[db] sungnam no handler for {path.name}")
+                continue
+            handler(path, loader, module, chunksize=chunksize)
 
     def ingest_telco_grid(self, files: List[Path], *, chunksize: int = 200_000) -> None:
         loader = CSVLoader()
@@ -105,14 +139,28 @@ class DBIngestor:
 
             coord_x_col = module.schema.get("coord_x_column")
             coord_y_col = module.schema.get("coord_y_column")
-            coord_x_series = df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
-            coord_y_series = df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+            coord_x_series = (
+                df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
+            )
+            coord_y_series = (
+                df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+            )
 
-            codes = df[module.schema["spatial_column"]].fillna("").astype(str).str.strip().replace("nan", "")
+            codes = (
+                df[module.schema["spatial_column"]]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .replace("nan", "")
+            )
             spatial_keys = codes.tolist()
             month_col = module.schema.get("month_column")
-            month_series = df[month_col] if month_col and month_col in df.columns else None
-            time_keys = module._format_time_series(df[module.schema["date_column"]], month_series)
+            month_series = (
+                df[month_col] if month_col and month_col in df.columns else None
+            )
+            time_keys = module._format_time_series(
+                df[module.schema["date_column"]], month_series
+            )
             time_keys = [self._bucket_time_value(t) for t in time_keys]
 
             meta = pd.DataFrame({"spatial": spatial_keys, "time": time_keys})
@@ -151,7 +199,13 @@ class DBIngestor:
                 if date_value is None:
                     continue
                 activity_rows.append(
-                    (spatial_key, date_value, self._granularity, "telco_grid", float(ft))
+                    (
+                        spatial_key,
+                        date_value,
+                        self._granularity,
+                        "telco_grid",
+                        float(ft),
+                    )
                 )
             for spatial_key, lon, lat in zip(codes.tolist(), lon_values, lat_values):
                 if not spatial_key:
@@ -177,7 +231,10 @@ class DBIngestor:
                 self._upsert_activity(activity_rows)
 
             demo_rows = self._demo_rows(
-                male_grouped, female_grouped, source="telco_grid", granularity=self._granularity
+                male_grouped,
+                female_grouped,
+                source="telco_grid",
+                granularity=self._granularity,
             )
             if demo_rows:
                 self._upsert_demographics(demo_rows)
@@ -208,10 +265,16 @@ class DBIngestor:
         loader = CSVLoader()
         schema = DOMAIN_INPUT_SCHEMA["sales"]
         header = loader.peek_columns(files[0])
-        sale_columns = [c for c in header if c.startswith(tuple(schema["sales_prefixes"]))]
-        count_columns = [c for c in header if c.startswith(tuple(schema["count_prefixes"]))]
+        sale_columns = [
+            c for c in header if c.startswith(tuple(schema["sales_prefixes"]))
+        ]
+        count_columns = [
+            c for c in header if c.startswith(tuple(schema["count_prefixes"]))
+        ]
         spatial_candidates = [c for c in schema["spatial_candidates"] if c in header]
-        usecols = list({schema["time_column"], *sale_columns, *count_columns, *spatial_candidates})
+        usecols = list(
+            {schema["time_column"], *sale_columns, *count_columns, *spatial_candidates}
+        )
 
         frames = loader.load_many_chunks(files, chunksize=chunksize, usecols=usecols)
         chunk_index = 0
@@ -225,10 +288,16 @@ class DBIngestor:
             if not sale_columns:
                 continue
             sales_total = (
-                df[sale_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+                df[sale_columns]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
             )
             sales_count = (
-                df[count_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+                df[count_columns]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
                 if count_columns
                 else 0.0
             )
@@ -312,12 +381,18 @@ class DBIngestor:
                 print(f"[db] telco chunk {chunk_index} processed ({elapsed:.1f}s)")
             df = df.reset_index(drop=True)
             male_total = (
-                df[male_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+                df[male_columns]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
                 if male_columns
                 else 0.0
             )
             female_total = (
-                df[female_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+                df[female_columns]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
                 if female_columns
                 else 0.0
             )
@@ -328,7 +403,11 @@ class DBIngestor:
             foot_traffic = male_total + female_total
 
             payload = pd.DataFrame(
-                {"spatial_key": spatial_key, "date": date_value, "foot_traffic": foot_traffic}
+                {
+                    "spatial_key": spatial_key,
+                    "date": date_value,
+                    "foot_traffic": foot_traffic,
+                }
             )
             payload = payload.dropna(subset=["spatial_key", "date"])
             if payload.empty:
@@ -338,7 +417,13 @@ class DBIngestor:
             spatial_rows = []
             for (spatial_key, date_value), row in grouped.iterrows():
                 activity_rows.append(
-                    (spatial_key, date_value, self._granularity, "telco", float(row["foot_traffic"]))
+                    (
+                        spatial_key,
+                        date_value,
+                        self._granularity,
+                        "telco",
+                        float(row["foot_traffic"]),
+                    )
                 )
                 spatial_rows.append(self._spatial_row(spatial_key))
             if spatial_rows:
@@ -370,12 +455,424 @@ class DBIngestor:
                         "silver", "telco", silver_df, partition_cols=["dt"]
                     )
 
+    def _ingest_sungnam_inflow(
+        self,
+        path: Path,
+        loader: CSVLoader,
+        module: SungnamServiceDomainModule,
+        *,
+        chunksize: int,
+    ) -> None:
+        schema = module.schema["inflow"]
+        usecols = [
+            schema["time_column"],
+            schema["spatial_column"],
+            schema["home_column"],
+            schema["work_column"],
+            schema["visit_column"],
+        ]
+        frames = loader.load_many_chunks([path], chunksize=chunksize, usecols=usecols)
+        source = module.table_source("inflow")
+        for df in frames:
+            df = df.reset_index(drop=True)
+            spatial_key = df[schema["spatial_column"]].astype(str).str.strip()
+            time_key = df[schema["time_column"]].astype(str).str.strip()
+            date_value = time_key.apply(self._parse_date)
+
+            foot_traffic = (
+                df[
+                    [
+                        schema["home_column"],
+                        schema["work_column"],
+                        schema["visit_column"],
+                    ]
+                ]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
+            )
+            payload = pd.DataFrame(
+                {
+                    "spatial_key": spatial_key,
+                    "date": date_value,
+                    "foot_traffic": foot_traffic,
+                }
+            )
+            payload = payload.dropna(subset=["spatial_key", "date"])
+            if payload.empty:
+                continue
+            grouped = payload.groupby(["spatial_key", "date"]).sum(numeric_only=True)
+            activity_rows = []
+            spatial_rows = []
+            for (spatial, date_val), row in grouped.iterrows():
+                activity_rows.append(
+                    (
+                        spatial,
+                        date_val,
+                        self._granularity,
+                        source,
+                        float(row["foot_traffic"]),
+                    )
+                )
+                spatial_rows.append(self._spatial_row(spatial))
+            if spatial_rows:
+                self._upsert_spatial(spatial_rows)
+            if activity_rows:
+                self._upsert_activity(activity_rows)
+
+    def _ingest_sungnam_sex_age(
+        self,
+        path: Path,
+        loader: CSVLoader,
+        module: SungnamServiceDomainModule,
+        *,
+        chunksize: int,
+    ) -> None:
+        schema = module.schema["sex_age"]
+        usecols = [
+            schema["time_column"],
+            schema["sex_age_column"],
+            schema["spatial_column"],
+            schema["home_column"],
+            schema["work_column"],
+            schema["visit_column"],
+        ]
+        frames = loader.load_many_chunks([path], chunksize=chunksize, usecols=usecols)
+        source = module.table_source("sex_age")
+        for df in frames:
+            df = df.reset_index(drop=True)
+            spatial_key = df[schema["spatial_column"]].astype(str).str.strip()
+            time_key = df[schema["time_column"]].astype(str).str.strip()
+            date_value = time_key.apply(self._parse_date)
+            sex_age = df[schema["sex_age_column"]].astype(str).str.strip().str.lower()
+            extracted = sex_age.str.extract(r"^([mw])_(.+)$")
+            sex = extracted[0].map({"m": "male", "w": "female"})
+            age_group = extracted[1]
+
+            value = (
+                df[
+                    [
+                        schema["home_column"],
+                        schema["work_column"],
+                        schema["visit_column"],
+                    ]
+                ]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
+            )
+
+            demo_payload = pd.DataFrame(
+                {
+                    "spatial_key": spatial_key,
+                    "date": date_value,
+                    "sex": sex,
+                    "age_group": age_group,
+                    "value": value,
+                }
+            )
+            demo_payload = demo_payload.dropna(
+                subset=["spatial_key", "date", "sex", "age_group"]
+            )
+            if demo_payload.empty:
+                continue
+            grouped_demo = demo_payload.groupby(
+                ["spatial_key", "date", "sex", "age_group"]
+            ).sum(numeric_only=True)
+
+            activity_rows = []
+            spatial_rows = []
+            grouped_activity = demo_payload.groupby(["spatial_key", "date"]).sum(
+                numeric_only=True
+            )
+            for (spatial, date_val), row in grouped_activity.iterrows():
+                activity_rows.append(
+                    (spatial, date_val, self._granularity, source, float(row["value"]))
+                )
+                spatial_rows.append(self._spatial_row(spatial))
+            if spatial_rows:
+                self._upsert_spatial(spatial_rows)
+            if activity_rows:
+                self._upsert_activity(activity_rows)
+
+            demo_rows = []
+            for (spatial, date_val, sex_val, age_val), row in grouped_demo.iterrows():
+                demo_rows.append(
+                    (
+                        spatial,
+                        date_val,
+                        self._granularity,
+                        source,
+                        str(sex_val),
+                        str(age_val),
+                        float(row["value"]),
+                    )
+                )
+            if demo_rows:
+                self._upsert_demographics(demo_rows)
+
+    def _ingest_sungnam_pcell_sex_age(
+        self,
+        path: Path,
+        loader: CSVLoader,
+        module: SungnamServiceDomainModule,
+        *,
+        chunksize: int,
+    ) -> None:
+        schema = module.schema["pcell_sex_age"]
+        frames = loader.load_many_chunks([path], chunksize=chunksize)
+        source = module.table_source("pcell_sex_age")
+        male_prefix = schema["male_prefix"]
+        female_prefix = schema["female_prefix"]
+
+        for df in frames:
+            df = df.reset_index(drop=True)
+            spatial_key = df[schema["spatial_column"]].astype(str).str.strip()
+            time_key = df[schema["time_column"]].astype(str).str.strip()
+            bucketed = time_key.apply(self._bucket_time_value)
+            meta = pd.DataFrame({"spatial": spatial_key, "time": bucketed})
+            valid_mask = (meta["spatial"] != "") & (meta["time"] != "")
+            if not valid_mask.any():
+                continue
+            meta = meta[valid_mask].reset_index(drop=True)
+
+            male_columns = self._prefixed_columns(df, male_prefix)
+            female_columns = self._prefixed_columns(df, female_prefix)
+            numeric_male = self._extract_numeric(df, male_columns).rename(
+                columns=self._strip_prefix_map(male_columns, male_prefix)
+            )
+            numeric_female = self._extract_numeric(df, female_columns).rename(
+                columns=self._strip_prefix_map(female_columns, female_prefix)
+            )
+            numeric_male = numeric_male.loc[valid_mask].reset_index(drop=True)
+            numeric_female = numeric_female.loc[valid_mask].reset_index(drop=True)
+
+            male_grouped = self._group_sum(meta, numeric_male)
+            female_grouped = self._group_sum(meta, numeric_female)
+            combined = male_grouped.add(female_grouped, fill_value=0.0)
+            foot_traffic = combined.sum(axis=1)
+
+            activity_rows = []
+            spatial_rows = []
+            for (spatial, time_val), ft in foot_traffic.items():
+                date_val = self._parse_date(time_val)
+                if date_val is None:
+                    continue
+                activity_rows.append(
+                    (spatial, date_val, self._granularity, source, float(ft))
+                )
+                spatial_rows.append(self._spatial_row(spatial))
+
+            if spatial_rows:
+                self._upsert_spatial(spatial_rows)
+            if activity_rows:
+                self._upsert_activity(activity_rows)
+
+            demo_rows = self._demo_rows(
+                male_grouped,
+                female_grouped,
+                source=source,
+                granularity=self._granularity,
+            )
+            if demo_rows:
+                self._upsert_demographics(demo_rows)
+
+            coord_x_col = schema.get("coord_x_column")
+            coord_y_col = schema.get("coord_y_column")
+            if coord_x_col in df.columns and coord_y_col in df.columns:
+                lon_values = pd.to_numeric(df[coord_x_col], errors="coerce")
+                lat_values = pd.to_numeric(df[coord_y_col], errors="coerce")
+                spatial_rows = []
+                for spatial, lon, lat in zip(
+                    spatial_key.tolist(), lon_values, lat_values
+                ):
+                    if not spatial:
+                        continue
+                    spatial_rows.append(
+                        (
+                            spatial,
+                            spatial,
+                            "coord" if pd.notna(lat) and pd.notna(lon) else None,
+                            spatial,
+                            lat,
+                            lon,
+                        )
+                    )
+                if spatial_rows:
+                    self._upsert_spatial(spatial_rows)
+
+    def _ingest_sungnam_pcell(
+        self,
+        path: Path,
+        loader: CSVLoader,
+        module: SungnamServiceDomainModule,
+        *,
+        chunksize: int,
+    ) -> None:
+        schema = module.schema["pcell"]
+        frames = loader.load_many_chunks([path], chunksize=chunksize)
+        source = module.table_source("pcell")
+        time_prefix = schema["time_prefix"]
+        for df in frames:
+            df = df.reset_index(drop=True)
+            spatial_key = df[schema["spatial_column"]].astype(str).str.strip()
+            time_key = df[schema["time_column"]].astype(str).str.strip()
+            date_value = time_key.apply(self._parse_date)
+
+            time_columns = [c for c in df.columns if c.startswith(time_prefix)]
+            if not time_columns:
+                continue
+            foot_traffic = (
+                df[time_columns]
+                .apply(pd.to_numeric, errors="coerce")
+                .fillna(0.0)
+                .sum(axis=1)
+            )
+            payload = pd.DataFrame(
+                {
+                    "spatial_key": spatial_key,
+                    "date": date_value,
+                    "foot_traffic": foot_traffic,
+                }
+            )
+            payload = payload.dropna(subset=["spatial_key", "date"])
+            if payload.empty:
+                continue
+            grouped = payload.groupby(["spatial_key", "date"]).sum(numeric_only=True)
+            activity_rows = []
+            spatial_rows = []
+            for (spatial, date_val), row in grouped.iterrows():
+                activity_rows.append(
+                    (
+                        spatial,
+                        date_val,
+                        self._granularity,
+                        source,
+                        float(row["foot_traffic"]),
+                    )
+                )
+                spatial_rows.append(self._spatial_row(spatial))
+            if spatial_rows:
+                self._upsert_spatial(spatial_rows)
+            if activity_rows:
+                self._upsert_activity(activity_rows)
+
+            coord_x_col = schema.get("coord_x_column")
+            coord_y_col = schema.get("coord_y_column")
+            if coord_x_col in df.columns and coord_y_col in df.columns:
+                lon_values = pd.to_numeric(df[coord_x_col], errors="coerce")
+                lat_values = pd.to_numeric(df[coord_y_col], errors="coerce")
+                spatial_rows = []
+                for spatial, lon, lat in zip(
+                    spatial_key.tolist(), lon_values, lat_values
+                ):
+                    if not spatial:
+                        continue
+                    spatial_rows.append(
+                        (
+                            spatial,
+                            spatial,
+                            "coord" if pd.notna(lat) and pd.notna(lon) else None,
+                            spatial,
+                            lat,
+                            lon,
+                        )
+                    )
+                if spatial_rows:
+                    self._upsert_spatial(spatial_rows)
+
+    def _ingest_sungnam_unique(
+        self,
+        path: Path,
+        loader: CSVLoader,
+        module: SungnamServiceDomainModule,
+        *,
+        chunksize: int,
+    ) -> None:
+        schema = module.schema["unique"]
+        frames = loader.load_many_chunks([path], chunksize=chunksize)
+        source = module.table_source("unique")
+        male_prefix = schema["male_prefix"]
+        female_prefix = schema["female_prefix"]
+
+        for df in frames:
+            df = df.reset_index(drop=True)
+            spatial_key = df[schema["spatial_column"]].astype(str).str.strip()
+            time_key = df[schema["time_column"]].astype(str).str.strip()
+            bucketed = time_key.apply(self._bucket_time_value)
+            meta = pd.DataFrame({"spatial": spatial_key, "time": bucketed})
+            valid_mask = (meta["spatial"] != "") & (meta["time"] != "")
+            if not valid_mask.any():
+                continue
+            meta = meta[valid_mask].reset_index(drop=True)
+
+            male_columns = self._prefixed_columns(df, male_prefix)
+            female_columns = self._prefixed_columns(df, female_prefix)
+            numeric_male = self._extract_numeric(df, male_columns).rename(
+                columns=self._strip_prefix_map(male_columns, male_prefix)
+            )
+            numeric_female = self._extract_numeric(df, female_columns).rename(
+                columns=self._strip_prefix_map(female_columns, female_prefix)
+            )
+            numeric_male = numeric_male.loc[valid_mask].reset_index(drop=True)
+            numeric_female = numeric_female.loc[valid_mask].reset_index(drop=True)
+
+            male_grouped = self._group_sum(meta, numeric_male)
+            female_grouped = self._group_sum(meta, numeric_female)
+            combined = male_grouped.add(female_grouped, fill_value=0.0)
+            foot_traffic = combined.sum(axis=1)
+
+            activity_rows = []
+            spatial_rows = []
+            for (spatial, time_val), ft in foot_traffic.items():
+                date_val = self._parse_date(time_val)
+                if date_val is None:
+                    continue
+                activity_rows.append(
+                    (spatial, date_val, self._granularity, source, float(ft))
+                )
+                spatial_rows.append(self._spatial_row(spatial))
+
+            if spatial_rows:
+                self._upsert_spatial(spatial_rows)
+            if activity_rows:
+                self._upsert_activity(activity_rows)
+
+            demo_rows = self._demo_rows(
+                male_grouped,
+                female_grouped,
+                source=source,
+                granularity=self._granularity,
+            )
+            if demo_rows:
+                self._upsert_demographics(demo_rows)
+
     def _group_sum(self, meta: pd.DataFrame, values: pd.DataFrame) -> pd.DataFrame:
         if values.empty:
-            empty_index = pd.MultiIndex(levels=[[], []], codes=[[], []], names=["spatial", "time"])
+            empty_index = pd.MultiIndex(
+                levels=[[], []], codes=[[], []], names=["spatial", "time"]
+            )
             return pd.DataFrame(index=empty_index)
         df = pd.concat([meta[["spatial", "time"]], values], axis=1)
         return df.groupby(["spatial", "time"]).sum()
+
+    def _prefixed_columns(self, df: pd.DataFrame, prefix: str) -> List[str]:
+        upper_prefix = prefix.upper()
+        return [col for col in df.columns if col.upper().startswith(upper_prefix)]
+
+    def _extract_numeric(self, df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+        if not columns:
+            return pd.DataFrame(index=df.index)
+        return df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+    def _strip_prefix_map(self, columns: List[str], prefix: str) -> dict:
+        upper_prefix = prefix.upper()
+        prefix_len = len(prefix)
+        mapping = {}
+        for col in columns:
+            if col.upper().startswith(upper_prefix):
+                mapping[col] = col[prefix_len:]
+        return mapping
 
     def _demo_rows(
         self,
@@ -395,11 +892,31 @@ class DBIngestor:
                 if date_value is None:
                     continue
                 rows.append(
-                    (spatial_key, date_value, granularity, source, sex, str(age_group), float(value))
+                    (
+                        spatial_key,
+                        date_value,
+                        granularity,
+                        source,
+                        sex,
+                        str(age_group),
+                        float(value),
+                    )
                 )
         return rows
 
-    def _upsert_spatial(self, rows: List[Tuple[str, Optional[str], Optional[str], Optional[str], Optional[float], Optional[float]]]) -> None:
+    def _upsert_spatial(
+        self,
+        rows: List[
+            Tuple[
+                str,
+                Optional[str],
+                Optional[str],
+                Optional[str],
+                Optional[float],
+                Optional[float],
+            ]
+        ],
+    ) -> None:
         unique = {}
         for row in rows:
             unique[row[0]] = row
@@ -485,8 +1002,13 @@ class DBIngestor:
     def _parse_date_series(self, series: pd.Series) -> pd.Series:
         parsed = series.copy()
         parsed = parsed.astype(str).str.strip()
-        parsed = parsed.where(parsed.str.len() != 6, parsed.str.slice(0, 4) + "-" + parsed.str.slice(4, 6) + "-01")
-        parsed = parsed.where(~(parsed.str.len() == 7) | (parsed.str[4] != "-"), parsed + "-01")
+        parsed = parsed.where(
+            parsed.str.len() != 6,
+            parsed.str.slice(0, 4) + "-" + parsed.str.slice(4, 6) + "-01",
+        )
+        parsed = parsed.where(
+            ~(parsed.str.len() == 7) | (parsed.str[4] != "-"), parsed + "-01"
+        )
         dt = pd.to_datetime(parsed, errors="coerce")
         return dt.dt.strftime("%Y-%m-%d")
 
@@ -500,7 +1022,14 @@ class DBIngestor:
 
     def _spatial_row(
         self, spatial_key: str
-    ) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[float], Optional[float]]:
+    ) -> Tuple[
+        str,
+        Optional[str],
+        Optional[str],
+        Optional[str],
+        Optional[float],
+        Optional[float],
+    ]:
         label = spatial_key
         lat, lon, code = self._parse_spatial_label(spatial_key)
         spatial_type = "coord" if lat is not None and lon is not None else None

@@ -1,4 +1,20 @@
 services:
+  app:
+    build: .
+    container_name: mcp-app
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - MCP_DB_DSN=postgresql://mcp:mcp@postgres:5432/mcp
+      - MCP_LLM_PROVIDER=gemini
+      # - MCP_GEMINI_API_KEY=your_api_key_here
+      # Add other environment variables if needed
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
   postgres:
     image: pgvector/pgvector:pg16
     container_name: mcp-postgres
@@ -7,7 +23,7 @@ services:
       POSTGRES_PASSWORD: mcp
       POSTGRES_DB: mcp
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d
       - mcp_pgdata:/var/lib/postgresql/data

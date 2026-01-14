@@ -3,6 +3,7 @@ from __future__ import annotations
 import calendar
 import json
 import math
+import os
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -48,6 +49,10 @@ class InsightSummarizer:
 
     def __init__(self, result_path: Path | str = DEFAULT_RESULT_PATH):
         self.result_path = Path(result_path)
+        self.source = os.getenv("MCP_SUMMARIZER_SOURCE", "views").lower()
+        self.dsn = os.getenv("MCP_DB_DSN", "postgresql://mcp:mcp@localhost:5432/mcp")
+        self.insights_table = os.getenv("MCP_INSIGHTS_TABLE", "insights")
+        self.insight_view = os.getenv("MCP_INSIGHT_VIEW", "v_insight_candidate_all")
         self._loaded = False
         self._generated_at: Optional[str] = None
         self._insights: List[Dict[str, Any]] = []
@@ -63,7 +68,9 @@ class InsightSummarizer:
         base_filtered = self._apply_filters(self._insights, filters)
         limited = self._apply_top_n(base_filtered, filters, target_path)
         summary_stats = self._compute_aggregations(limited, target_path, aggregations)
-        groups = self._compute_groups(limited, query.get("group_by") or [], target_path, aggregations)
+        groups = self._compute_groups(
+            limited, query.get("group_by") or [], target_path, aggregations
+        )
         compare_info = self._compute_comparison(
             base_filtered, filters, query.get("compare"), target_path, aggregations
         )
@@ -82,6 +89,15 @@ class InsightSummarizer:
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
+        if self.source == "views":
+            self._load_from_views()
+        elif self.source == "postgres":
+            self._load_from_postgres()
+        else:
+            self._load_from_file()
+        self._loaded = True
+
+    def _load_from_file(self) -> None:
         if not self.result_path.exists():
             raise FileNotFoundError(
                 f"MCP result file not found: {self.result_path}. "
@@ -97,9 +113,204 @@ class InsightSummarizer:
         if not isinstance(insights, list):
             raise ValueError("result.json must contain a list of insight records.")
         self._insights = insights
-        self._loaded = True
 
-    def _apply_filters(self, insights: Iterable[Dict[str, Any]], filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _load_from_postgres(self) -> None:
+        try:
+            import psycopg2
+        except ImportError as exc:
+            raise RuntimeError(
+                "psycopg2가 필요합니다. `pip install psycopg2-binary` 후 다시 실행하세요."
+            ) from exc
+
+        with psycopg2.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT generated_at FROM {self.insights_table} ORDER BY generated_at DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise FileNotFoundError(
+                        f"No insights found in {self.insights_table}. "
+                        "Generate insights before calling the summarizer."
+                    )
+                generated_at = row[0]
+                self._generated_at = (
+                    generated_at.isoformat()
+                    if hasattr(generated_at, "isoformat")
+                    else str(generated_at)
+                )
+                cur.execute(
+                    f"SELECT payload::text FROM {self.insights_table} WHERE generated_at = %s ORDER BY id",
+                    (generated_at,),
+                )
+                rows = cur.fetchall()
+
+        insights: List[Dict[str, Any]] = []
+        for (payload_text,) in rows:
+            insights.append(json.loads(payload_text))
+        self._insights = insights
+
+    def _load_from_views(self) -> None:
+        try:
+            import psycopg2
+        except ImportError as exc:
+            raise RuntimeError(
+                "psycopg2가 필요합니다. `pip install psycopg2-binary` 후 다시 실행하세요."
+            ) from exc
+
+        view = self.insight_view
+        if not view:
+            raise ValueError("MCP_INSIGHT_VIEW is required for view-based summarizer.")
+
+        has_level = view == "v_insight_candidate_all"
+        select_level = "v.level," if has_level else "NULL AS level,"
+        join_clause = ""
+        if has_level:
+            join_clause = "LEFT JOIN mv_insight_advanced a ON a.level = v.level AND a.spatial_label = v.spatial_label"
+        else:
+            join_clause = (
+                "LEFT JOIN mv_insight_advanced a ON a.spatial_label = v.spatial_label"
+            )
+
+        query = f"""
+            SELECT
+                {select_level}
+                v.spatial_label,
+                v.date,
+                v.foot_traffic,
+                v.sales,
+                v.ft_prev,
+                v.ft_mom_pct,
+                v.ft_prev_year,
+                v.ft_yoy_pct,
+                v.sales_prev,
+                v.sales_mom_pct,
+                v.sales_prev_year,
+                v.sales_yoy_pct,
+                v.ft_avg,
+                v.sales_avg,
+                v.ft_std,
+                v.sales_std,
+                v.ft_zscore,
+                v.sales_zscore,
+                v.ft_avg_date,
+                v.sales_avg_date,
+                v.ft_rank,
+                v.sales_rank,
+                v.dominant_group,
+                v.dominant_share,
+                a.corr_sales_foot_traffic,
+                a.sales_impact_slope,
+                a.sales_impact_score,
+                a.foot_traffic_impact_score
+            FROM {view} v
+            {join_clause}
+        """
+
+        with psycopg2.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                rows = cur.fetchall()
+
+        insights: List[Dict[str, Any]] = []
+        for row in rows:
+            (
+                level,
+                spatial_label,
+                date_value,
+                foot_traffic,
+                sales,
+                ft_prev,
+                ft_mom_pct,
+                ft_prev_year,
+                ft_yoy_pct,
+                sales_prev,
+                sales_mom_pct,
+                sales_prev_year,
+                sales_yoy_pct,
+                ft_avg,
+                sales_avg,
+                ft_std,
+                sales_std,
+                ft_zscore,
+                sales_zscore,
+                ft_avg_date,
+                sales_avg_date,
+                ft_rank,
+                sales_rank,
+                dominant_group,
+                dominant_share,
+                corr_sales_foot_traffic,
+                sales_impact_slope,
+                sales_impact_score,
+                foot_traffic_impact_score,
+            ) = row
+
+            time_value = (
+                date_value.isoformat()
+                if hasattr(date_value, "isoformat")
+                else str(date_value)
+            )
+            insights.append(
+                {
+                    "spatial": spatial_label,
+                    "time": time_value,
+                    "level": level,
+                    "population": {
+                        "foot_traffic": foot_traffic,
+                        "foot_traffic_prev": ft_prev,
+                        "foot_traffic_mom_pct": ft_mom_pct,
+                        "foot_traffic_prev_year": ft_prev_year,
+                        "foot_traffic_yoy_pct": ft_yoy_pct,
+                        "foot_traffic_avg": ft_avg,
+                        "foot_traffic_std": ft_std,
+                        "foot_traffic_rank": ft_rank,
+                        "foot_traffic_zscore": ft_zscore,
+                        "foot_traffic_avg_date": ft_avg_date,
+                    },
+                    "economic": {
+                        "sales": sales,
+                        "sales_prev": sales_prev,
+                        "sales_mom_pct": sales_mom_pct,
+                        "sales_prev_year": sales_prev_year,
+                        "sales_yoy_pct": sales_yoy_pct,
+                        "sales_avg": sales_avg,
+                        "sales_std": sales_std,
+                        "sales_rank": sales_rank,
+                        "sales_zscore": sales_zscore,
+                        "sales_avg_date": sales_avg_date,
+                    },
+                    "analysis": {
+                        "trend": {
+                            "foot_traffic_mom_pct": ft_mom_pct,
+                            "foot_traffic_yoy_pct": ft_yoy_pct,
+                            "sales_mom_pct": sales_mom_pct,
+                            "sales_yoy_pct": sales_yoy_pct,
+                        },
+                        "anomalies": {
+                            "foot_traffic_zscore": ft_zscore,
+                            "sales_zscore": sales_zscore,
+                        },
+                        "impact": {
+                            "corr_sales_foot_traffic": corr_sales_foot_traffic,
+                            "sales_impact_slope": sales_impact_slope,
+                            "sales_impact_score": sales_impact_score,
+                            "foot_traffic_impact_score": foot_traffic_impact_score,
+                        },
+                        "demographics": {
+                            "dominant_group": dominant_group,
+                            "dominant_share": dominant_share,
+                        },
+                    },
+                }
+            )
+
+        self._generated_at = datetime.now().isoformat()
+        self._insights = insights
+
+    def _apply_filters(
+        self, insights: Iterable[Dict[str, Any]], filters: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         spatial_filter = set(filters.get("spatial") or [])
         time_filter = filters.get("time") or {}
         demo_filter = filters.get("demographics") or {}
@@ -120,7 +331,9 @@ class InsightSummarizer:
             filtered.append(item)
         return filtered
 
-    def _match_demographics(self, item: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    def _match_demographics(
+        self, item: Dict[str, Any], filters: Dict[str, Any]
+    ) -> bool:
         if not filters:
             return True
         flattened = self._flatten_demographics(item)
@@ -137,9 +350,8 @@ class InsightSummarizer:
     def _flatten_demographics(self, item: Dict[str, Any]) -> set:
         result = set()
         demographics = (
-            (((item.get("population") or {}).get("demographics")) or None)
-            or ((item.get("analysis") or {}).get("demographics") or None)
-        )
+            ((item.get("population") or {}).get("demographics")) or None
+        ) or ((item.get("analysis") or {}).get("demographics") or None)
 
         def _walk(prefix: str, node: Any) -> None:
             if isinstance(node, dict):
@@ -273,12 +485,18 @@ class InsightSummarizer:
         for key, records in buckets.items():
             groups.append(
                 {
-                    "group": {group_paths[idx]: key_part for idx, key_part in enumerate(key)},
+                    "group": {
+                        group_paths[idx]: key_part for idx, key_part in enumerate(key)
+                    },
                     "count": len(records),
-                    "aggregations": self._compute_aggregations(records, target_path, aggregations),
+                    "aggregations": self._compute_aggregations(
+                        records, target_path, aggregations
+                    ),
                 }
             )
-        groups.sort(key=lambda row: tuple(str(row["group"].get(path)) for path in group_paths))
+        groups.sort(
+            key=lambda row: tuple(str(row["group"].get(path)) for path in group_paths)
+        )
         return groups
 
     def _compute_comparison(
@@ -301,8 +519,12 @@ class InsightSummarizer:
         previous_records = self._apply_filters(self._insights, cloned_filters)
         if not previous_records:
             return None
-        current_summary = self._compute_aggregations(current_records, target_path, aggregations)
-        previous_summary = self._compute_aggregations(previous_records, target_path, aggregations)
+        current_summary = self._compute_aggregations(
+            current_records, target_path, aggregations
+        )
+        previous_summary = self._compute_aggregations(
+            previous_records, target_path, aggregations
+        )
         delta = self._compute_delta(current_summary, previous_summary)
         return {
             "type": compare.get("type"),
@@ -312,7 +534,9 @@ class InsightSummarizer:
             "delta": delta,
         }
 
-    def _shift_time_filter(self, time_filter: Dict[str, Any], compare: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _shift_time_filter(
+        self, time_filter: Dict[str, Any], compare: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         start = self._parse_date(time_filter.get("start"))
         end = self._parse_date(time_filter.get("end"))
         if not start or not end:
@@ -360,7 +584,9 @@ class InsightSummarizer:
             return start - delta, end - delta
         raise ValueError(f"Unsupported interval format: {interval}")
 
-    def _project_records(self, insights: Sequence[Dict[str, Any]], target_path: str) -> List[Dict[str, Any]]:
+    def _project_records(
+        self, insights: Sequence[Dict[str, Any]], target_path: str
+    ) -> List[Dict[str, Any]]:
         tokens = target_path.split(".")
         projected = []
         for rec in insights:

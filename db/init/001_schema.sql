@@ -57,25 +57,6 @@ CREATE TABLE IF NOT EXISTS fact_weather (
     PRIMARY KEY (spatial_key, date)
 );
 
-CREATE TABLE IF NOT EXISTS insights_summary (
-    id BIGSERIAL PRIMARY KEY,
-    generated_at TIMESTAMPTZ NOT NULL,
-    spatial_key TEXT,
-    date DATE,
-    source TEXT,
-    foot_traffic DOUBLE PRECISION,
-    sales DOUBLE PRECISION,
-    dominant_group TEXT,
-    dominant_share DOUBLE PRECISION,
-    trend_direction TEXT,
-    trend_slope DOUBLE PRECISION,
-    correlation DOUBLE PRECISION,
-    impact_score DOUBLE PRECISION,
-    impact_class TEXT,
-    metrics_summary JSONB,
-    demographics JSONB
-);
-
 CREATE INDEX IF NOT EXISTS idx_gold_activity_date ON gold_activity (date);
 CREATE INDEX IF NOT EXISTS idx_gold_activity_spatial ON gold_activity (spatial_key);
 CREATE INDEX IF NOT EXISTS idx_gold_demographics_date ON gold_demographics (date);

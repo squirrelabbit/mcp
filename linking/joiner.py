@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+
 class CrossDomainJoiner:
     def join(self, records):
         joined = defaultdict(list)

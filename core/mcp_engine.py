@@ -8,6 +8,7 @@ from core.insight_engine import CoreInsightEngine
 
 logger = logging.getLogger(__name__)
 
+
 class MCPEngine:
     def __init__(self):
         self.normalizer = NormalizationLayer()
@@ -40,5 +41,5 @@ class MCPEngine:
             "normalized": normalized,
             "joined": joined,
             "metrics": metrics,
-            "insights": insights
+            "insights": insights,
         }

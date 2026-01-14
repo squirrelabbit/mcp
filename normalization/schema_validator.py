@@ -1,9 +1,15 @@
 # normalization/schema_validator.py
 
+
 class SchemaValidator:
     REQUIRED_FIELDS = [
-        "spatial_key", "time_key",
-        "population", "economic", "behavior", "events", "source"
+        "spatial_key",
+        "time_key",
+        "population",
+        "economic",
+        "behavior",
+        "events",
+        "source",
     ]
 
     def validate(self, record):

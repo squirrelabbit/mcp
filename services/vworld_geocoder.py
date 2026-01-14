@@ -67,12 +67,12 @@ def reverse_geocode_sig(lon: float, lat: float) -> Optional[Dict[str, Any]]:
             return _parse_response(payload)
         except urllib.error.HTTPError as exc:
             if exc.code in (429, 503) and attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 continue
             raise
         except urllib.error.URLError:
             if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
                 continue
             raise
     return None

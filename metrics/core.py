@@ -1,7 +1,7 @@
 # metrics/core.py
 
-class MetricsCore:
 
+class MetricsCore:
     def uplift(self, current, baseline):
         if baseline is None or baseline == 0:
             return None
@@ -13,8 +13,8 @@ class MetricsCore:
         mean = sum(series) / len(series)
         if mean == 0:
             return None
-        variance = sum((x - mean)**2 for x in series) / len(series)
-        return (variance ** 0.5) / mean
+        variance = sum((x - mean) ** 2 for x in series) / len(series)
+        return (variance**0.5) / mean
 
     def rate_of_change(self, prev, current):
         if prev == 0 or prev is None:

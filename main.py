@@ -1,15 +1,5 @@
-import json
 import os
-import re
-import shutil
-from datetime import datetime, timezone
 from pathlib import Path
-
-from domain.sales_module import SalesDomainModule
-from domain.telco_module import TelcoDomainModule
-from domain.telco_grid_module import TelcoGridDomainModule
-from core.mcp_engine import MCPEngine
-from utils.domain_loader import load_domain_records
 
 
 DATA_DIR = Path("data")
@@ -18,53 +8,11 @@ DATA_SOURCES = [DATA_DIR, LEGACY_DATA_DIR]
 SALES_PATTERNS = ["JN_SALES_AGE_YM_*.CSV"]
 TELCO_PATTERNS = ["DJ_SKT_SGG_SX_STY_DAY_CNT_*.csv"]
 TELCO_GRID_PATTERNS = ["GJ_SKT_SERVICE_SEX_AGE_PCELL_POP_*.csv"]
-OUTPUT_DIR = Path("output")
-DEFAULT_RESULT_PATH = OUTPUT_DIR / "result.json"
-DEFAULT_RESULT_JSONL_PATH = OUTPUT_DIR / "result.ndjson"
-DEFAULT_RESULT_ROW_DIR = OUTPUT_DIR / "insights"
-
-
-def _write_jsonl(target_path: Path, payload: dict) -> None:
-    """Persist newline-delimited insights for easier row-wise inspection."""
-    lines = []
-    for record in payload.get("insights", []):
-        enriched = {"generated_at": payload.get("generated_at"), **record}
-        lines.append(json.dumps(enriched, ensure_ascii=False))
-    target_path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _write_row_files(target_dir: Path, payload: dict) -> None:
-    """Persist each insight into its own JSON file."""
-    records = payload.get("insights", [])
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    for idx, record in enumerate(records, start=1):
-        spatial = record.get("spatial") or "unknown_spatial"
-        time_key = record.get("time") or "unknown_time"
-        slug = _slugify(f"{spatial}_{time_key}")
-        filename = f"{idx:06d}_{slug}.json"
-        file_path = target_dir / filename
-        file_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _slugify(value: str, max_length: int = 64) -> str:
-    """Make filesystem-friendly label."""
-    slug = re.sub(r"[^0-9A-Za-z_-]+", "-", value).strip("-")
-    slug = slug or "record"
-    if len(slug) > max_length:
-        slug = slug[:max_length].rstrip("-")
-    return slug.lower()
+SUNGNAM_PATTERNS = ["sungnam_*.csv", "sungnam_*.CSV"]
 
 
 def main():
-    output_target = os.getenv("MCP_OUTPUT_TARGET", "file").lower()
-    save_local_raw = os.getenv("MCP_SAVE_LOCAL")
-    if save_local_raw is None:
-        save_local = output_target != "postgres"
-    else:
-        save_local = save_local_raw != "0"
-    mode = os.getenv("MCP_MODE", "full").lower()
+    mode = os.getenv("MCP_MODE", "db_ingest").lower()
     if mode == "db_ingest":
         from services.db_ingest import DBIngestor
         from services.admin_loader import (
@@ -91,7 +39,13 @@ def main():
                 s3_bucket=os.getenv("MCP_LAKE_S3_BUCKET"),
             )
         ingestor = DBIngestor(dsn, granularity=granularity, lake_writer=lake_writer)
-        ingestor.ingest_all(DATA_SOURCES, SALES_PATTERNS, TELCO_PATTERNS, TELCO_GRID_PATTERNS)
+        ingestor.ingest_all(
+            DATA_SOURCES,
+            SALES_PATTERNS,
+            TELCO_PATTERNS,
+            TELCO_GRID_PATTERNS,
+            SUNGNAM_PATTERNS,
+        )
         ingestor.close()
         sig_shapefile = os.getenv("MCP_SIG_SHAPEFILE")
         if sig_shapefile:
@@ -135,58 +89,21 @@ def main():
         print(f"[batch] spatial_label updated {updated_label} rows")
         print("[batch] db ingest complete")
         return
-
-    # 1) Load + normalize per domain with caching
-    all_records = []
-    all_records.extend(
-        load_domain_records("sales", SALES_PATTERNS, SalesDomainModule, DATA_SOURCES)
-    )
-    all_records.extend(
-        load_domain_records("telco", TELCO_PATTERNS, TelcoDomainModule, DATA_SOURCES)
-    )
-    all_records.extend(
-        load_domain_records(
-            "telco_grid",
-            TELCO_GRID_PATTERNS,
-            TelcoGridDomainModule,
-            DATA_SOURCES,
-            chunked=True,
-        )
-    )
-
-    if not all_records:
-        raise SystemExit("Failed to normalize any records.")
-
-    # 2) MCP pipeline
-    engine = MCPEngine()
-    result = engine.run(all_records)
-
-    # 4) Persist result.json for Summarizer layer
-    payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "insights": result["insights"],
-    }
-    if save_local:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        DEFAULT_RESULT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-        _write_jsonl(DEFAULT_RESULT_JSONL_PATH, payload)
-        _write_row_files(DEFAULT_RESULT_ROW_DIR, payload)
-        print(f"[batch] result saved to {DEFAULT_RESULT_PATH}")
-        print(f"[batch] ndjson saved to {DEFAULT_RESULT_JSONL_PATH}")
-        print(f"[batch] per-record insights saved under {DEFAULT_RESULT_ROW_DIR}")
-
-    if output_target == "postgres":
-        from services.postgres_writer import PostgresWriter
+    if mode == "refresh_advanced_insights":
+        try:
+            import psycopg2
+        except ImportError as exc:
+            raise SystemExit(
+                "psycopg2가 필요합니다. `pip install psycopg2-binary` 후 다시 실행하세요."
+            ) from exc
 
         dsn = os.getenv("MCP_DB_DSN", "postgresql://mcp:mcp@localhost:5432/mcp")
-        writer = PostgresWriter(dsn)
-        writer.write_insights(payload)
-        writer.close()
-        print("[batch] insights saved to postgres")
-
-    # 5) Print example
-    print("\n=== Sample Insight ===")
-    print(result["insights"][:3])
+        with psycopg2.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("REFRESH MATERIALIZED VIEW mv_insight_advanced;")
+        print("[batch] mv_insight_advanced refreshed")
+        return
+    raise SystemExit("MCP_MODE must be one of: db_ingest, refresh_advanced_insights.")
 
 
 if __name__ == "__main__":

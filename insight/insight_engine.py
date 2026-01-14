@@ -14,7 +14,9 @@ class InsightEngine:
     def build(self, joined, metrics):
         """Normalize joined records, enrich with analysis layers, and return LLM-ready JSON."""
         aggregated: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        spatial_timelines: Dict[str, List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]] = defaultdict(list)
+        spatial_timelines: Dict[
+            str, List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]
+        ] = defaultdict(list)
 
         for key, items in joined.items():
             spatial, time_key = key
@@ -55,7 +57,9 @@ class InsightEngine:
                 "trend": trend_map.get(key),
                 "correlation": correlation_map.get(spatial),
                 "impact": self._impact_insight(record_metrics),
-                "demographics": self._demo_insight(record["population"].get("demographics")),
+                "demographics": self._demo_insight(
+                    record["population"].get("demographics")
+                ),
                 "metrics_summary": self._metric_highlights(record_metrics),
             }
             enriched = {**record, "analysis": insights}
@@ -92,11 +96,11 @@ class InsightEngine:
         }
 
     def _econ_summary(self, items):
-        return {
-            "sales": sum(i["economic"].get("sales", 0) for i in items)
-        }
+        return {"sales": sum(i["economic"].get("sales", 0) for i in items)}
 
-    def _trend_insight(self, entries: List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    def _trend_insight(
+        self, entries: List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
         """
         Determine increase/decrease/stable trend for each time point within a spatial timeline.
         Uses linear regression slope across the latest 3 observations.
@@ -106,13 +110,21 @@ class InsightEngine:
         for parsed_time, key, record in entries:
             value = record["economic"].get("sales")
             if value is None:
-                results[key] = {"direction": None, "slope": None, "temporal_unit": self._resolve_time_unit(record["metrics"])}
+                results[key] = {
+                    "direction": None,
+                    "slope": None,
+                    "temporal_unit": self._resolve_time_unit(record["metrics"]),
+                }
                 continue
 
             history.append((parsed_time, float(value)))
             recent = [(idx, val) for idx, (_, val) in enumerate(history[-3:])]
             if len(recent) < 2:
-                results[key] = {"direction": None, "slope": None, "temporal_unit": self._resolve_time_unit(record["metrics"])}
+                results[key] = {
+                    "direction": None,
+                    "slope": None,
+                    "temporal_unit": self._resolve_time_unit(record["metrics"]),
+                }
                 continue
 
             x = np.arange(len(recent))
@@ -134,7 +146,9 @@ class InsightEngine:
             }
         return results
 
-    def _correlation_insight(self, entries: List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]) -> Dict[str, Any]:
+    def _correlation_insight(
+        self, entries: List[Tuple[datetime, Tuple[str, str], Dict[str, Any]]]
+    ) -> Dict[str, Any]:
         """Compute correlation between foot traffic and sales for a spatial timeline."""
         traffic = []
         sales = []
@@ -209,7 +223,9 @@ class InsightEngine:
             "top_groups": top_groups,
         }
 
-    def _accumulate_demographics(self, counter: Counter, demo: Dict[str, Any], prefix: str = "") -> None:
+    def _accumulate_demographics(
+        self, counter: Counter, demo: Dict[str, Any], prefix: str = ""
+    ) -> None:
         for key, value in demo.items():
             name = f"{prefix}.{key}" if prefix else key
             if isinstance(value, (int, float)):
@@ -257,7 +273,9 @@ class InsightEngine:
                 parts.append(f"Δ={first['rate_of_change']:.2f}")
             if "volatility" in first and first["volatility"] is not None:
                 parts.append(f"vol={first['volatility']:.2f}")
-            metric_desc = f"{first['domain']} {'/'.join(parts)}" if parts else first["domain"]
+            metric_desc = (
+                f"{first['domain']} {'/'.join(parts)}" if parts else first["domain"]
+            )
 
         return (
             f"{record['spatial']} @ {record['time']}: trend={trend_desc}, "

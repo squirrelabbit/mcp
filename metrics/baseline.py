@@ -44,7 +44,9 @@ class BaselineMetrics:
         """기존 API 호환을 위한 alias."""
         return self.compute(joined_records, normalized_records)
 
-    def _build_history(self, normalized_records) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
+    def _build_history(
+        self, normalized_records
+    ) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
         history = defaultdict(list)
         for record in normalized_records:
             domain = record.get("source")

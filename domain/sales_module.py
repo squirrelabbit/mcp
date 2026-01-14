@@ -75,7 +75,9 @@ class SalesDomainModule(BaseDomainModule):
             return categories
 
         fallback_column = self.schema.get("category_column")
-        fallback_value = self._clean_value(row.get(fallback_column)) if fallback_column else None
+        fallback_value = (
+            self._clean_value(row.get(fallback_column)) if fallback_column else None
+        )
         if fallback_value:
             return {"label": fallback_value}
         return None

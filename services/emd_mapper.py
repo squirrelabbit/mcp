@@ -24,14 +24,20 @@ def update_dim_spatial_with_emd(
         shape = gpd.read_file(shapefile_path)
     if shape.crs is None:
         if epsg is None:
-            raise RuntimeError("Shapefile CRS가 없습니다. MCP_EMD_EPSG로 EPSG를 지정하세요.")
+            raise RuntimeError(
+                "Shapefile CRS가 없습니다. MCP_EMD_EPSG로 EPSG를 지정하세요."
+            )
         shape = shape.set_crs(epsg)
     shape = shape.to_crs(epsg=4326)
 
     if name_field is None:
-        candidates = [c for c in shape.columns if "EMD" in c.upper() or "NAME" in c.upper()]
+        candidates = [
+            c for c in shape.columns if "EMD" in c.upper() or "NAME" in c.upper()
+        ]
         if not candidates:
-            raise RuntimeError("행정동 이름 필드를 찾지 못했습니다. MCP_EMD_NAME_FIELD를 지정하세요.")
+            raise RuntimeError(
+                "행정동 이름 필드를 찾지 못했습니다. MCP_EMD_NAME_FIELD를 지정하세요."
+            )
         name_field = candidates[0]
 
     fields = [name_field, "geometry"]

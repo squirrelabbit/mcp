@@ -44,11 +44,8 @@ def load_query(path: Path) -> Dict[str, Any]:
 def create_default_query(path: Path) -> None:
     default_query = {
         "target": "population.foot_traffic",
-        "filters": {
-            "time": {"month": datetime.now().month},
-            "spatial": []
-        },
-        "aggregations": ["avg"]
+        "filters": {"time": {"month": datetime.now().month}, "spatial": []},
+        "aggregations": ["avg"],
     }
     path.write_text(json.dumps(default_query, ensure_ascii=False, indent=2))
     print(f"기본 예시 쿼리를 생성했습니다: {path}")
@@ -57,8 +54,12 @@ def create_default_query(path: Path) -> None:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Validate MCP query JSON and run pipeline.")
-    parser.add_argument("query_file", type=Path, help="Path to query JSON file (생성됩니다)")
+    parser = argparse.ArgumentParser(
+        description="Validate MCP query JSON and run pipeline."
+    )
+    parser.add_argument(
+        "query_file", type=Path, help="Path to query JSON file (생성됩니다)"
+    )
     args = parser.parse_args()
 
     schema = load_schema()

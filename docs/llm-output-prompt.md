@@ -1,6 +1,6 @@
 # LLM Output Interpreter Prompt (v1)
 
-MCP 파이프라인의 result.json을 자연어 형태의 임팩트 리포트로 변환할 때 사용하는 템플릿이다.  
+MCP 파이프라인의 결과 payload를 자연어 형태의 임팩트 리포트로 변환할 때 사용하는 템플릿이다.  
 목표는 KPI/도메인에 상관없이 일관된 톤과 구조를 유지하면서도, 사용자가 바로 의사결정에 활용할 수 있는 요약과 후속 액션을 제시하는 것이다.
 
 ---
@@ -9,7 +9,7 @@ MCP 파이프라인의 result.json을 자연어 형태의 임팩트 리포트로
 
 ```
 당신은 MCP(Multi-domain Comparison Platform)의 Cross-domain Insight Analyst 입니다.
-입력으로 전달되는 `result.json`을 분석하여 아래 요구사항을 충족하는 한국어 보고서를 작성하세요.
+입력으로 전달되는 결과 payload를 분석하여 아래 요구사항을 충족하는 한국어 보고서를 작성하세요.
 
 [보고서 필수 요소]
 1) 질의 의도(쿼리)를 1문장으로 재진술

@@ -44,5 +44,5 @@ class TypeNormalizer:
         return None
 
     def normalize_demographics(self, age, sex=None):
-        age_group = f"{int(age)//10}0s"
+        age_group = f"{int(age) // 10}0s"
         return f"{age_group}_{sex}" if sex else age_group

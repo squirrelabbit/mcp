@@ -2,6 +2,7 @@
 
 from .type_normalizer import TypeNormalizer
 
+
 class CommonAxesMapper:
     def __init__(self):
         self.normalizer = TypeNormalizer()
@@ -19,14 +20,14 @@ class CommonAxesMapper:
         pop = record.get("population", {})
         record["population"] = {
             "foot_traffic": pop.get("foot_traffic", 0),
-            "demographics": pop.get("demographics", None)
+            "demographics": pop.get("demographics", None),
         }
 
         # economic
         econ = record.get("economic", {})
         record["economic"] = {
             "sales": econ.get("sales", 0),
-            "sales_count": econ.get("sales_count", 0)
+            "sales_count": econ.get("sales_count", 0),
         }
 
         # behavior/events 그대로 두되 빈값 보완

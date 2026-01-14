@@ -22,11 +22,17 @@ venv/
 # Caches
 .llm_cache/
 .mcp_cache/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.cache/
 
 # Data/artifacts (local)
 data/
 AL_D001_00_20251204/
 llm_payloads/
+output/
+lake/
 
 # Logs
 *.log

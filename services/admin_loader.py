@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import geopandas as gpd
 import psycopg2
@@ -46,7 +46,9 @@ def load_sig_admin(
         shape = gpd.read_file(shapefile_path)
     if shape.crs is None:
         if epsg is None:
-            raise RuntimeError("Shapefile CRS가 없습니다. MCP_SIG_EPSG로 EPSG를 지정하세요.")
+            raise RuntimeError(
+                "Shapefile CRS가 없습니다. MCP_SIG_EPSG로 EPSG를 지정하세요."
+            )
         shape = shape.set_crs(epsg)
 
     rows = []

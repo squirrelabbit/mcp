@@ -12,12 +12,18 @@ class TelcoDomainModule(BaseDomainModule):
         self.schema = DOMAIN_INPUT_SCHEMA["telco"]
 
     def normalize(self, df) -> List[dict]:
-        male_columns = [c for c in df.columns if c.startswith(self.schema["male_prefix"])]
-        female_columns = [c for c in df.columns if c.startswith(self.schema["female_prefix"])]
+        male_columns = [
+            c for c in df.columns if c.startswith(self.schema["male_prefix"])
+        ]
+        female_columns = [
+            c for c in df.columns if c.startswith(self.schema["female_prefix"])
+        ]
 
         normalized = []
         for _, row in df.iterrows():
-            time_key = self._format_date(row.get(self.schema["time_column"]), row.get(self.schema["day_column"]))
+            time_key = self._format_date(
+                row.get(self.schema["time_column"]), row.get(self.schema["day_column"])
+            )
             spatial_raw = row.get(self.schema["spatial_column"])
             spatial_key = str(spatial_raw) if spatial_raw is not None else None
 

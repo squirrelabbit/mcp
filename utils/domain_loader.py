@@ -82,12 +82,16 @@ def load_domain_records(
     module = module_cls()
     if chunked and hasattr(module, "normalize_chunks"):
         env_chunksize = os.getenv("MCP_CSV_CHUNKSIZE")
-        resolved_chunksize = chunksize or (int(env_chunksize) if env_chunksize else 200_000)
+        resolved_chunksize = chunksize or (
+            int(env_chunksize) if env_chunksize else 200_000
+        )
         usecols = None
         if hasattr(module, "select_columns"):
             header = loader.peek_columns(files[0])
             usecols = module.select_columns(header)
-        frames = loader.load_many_chunks(files, chunksize=resolved_chunksize, usecols=usecols)
+        frames = loader.load_many_chunks(
+            files, chunksize=resolved_chunksize, usecols=usecols
+        )
         records = module.normalize_chunks(frames)
     else:
         df = loader.load_many(files, parallel=parallel)

@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -63,7 +62,9 @@ def build_parser_prompt(user_request: str, template: str) -> str:
     return f"{prefix}\n\n사용자 입력:\n{user_request}\n\nJSON:"
 
 
-def build_output_prompt(result_json: Dict[str, Any], template: str, user_request: str) -> str:
+def build_output_prompt(
+    result_json: Dict[str, Any], template: str, user_request: str
+) -> str:
     template_text = template or (
         "당신은 MCP 분석 결과를 요약하는 어시스턴트입니다. "
         "사용자 요청과 하단 JSON을 분석하여 중요한 인사이트를 한국어 문장으로 작성하세요."
@@ -96,6 +97,7 @@ def map_request_to_query(
     cache_source = "miss"
     vector_similarity: Optional[float] = None
     embedding_error: Optional[str] = None
+    llm_error: Optional[str] = None
 
     if use_cache:
         query_cache_key = _hash_components(
@@ -131,10 +133,15 @@ def map_request_to_query(
 
     if query_obj is None:
         if parser_model in ("gemini", "gemini-1.5-flash", "gemini-1.5-pro"):
-            query_obj = llm_map_query(request, dump=False)
-            query_generated = True
-            cache_source = "llm"
-        else:
+            try:
+                query_obj = llm_map_query(request, dump=False)
+                query_generated = True
+                cache_source = "llm"
+            except Exception as exc:
+                llm_error = str(exc)
+                query_obj = {}
+                cache_source = "llm_error"
+        if query_obj is None:
             parser_llm = LLMClient(
                 provider=_mock_parser_provider, cache_dir=Path(".llm_cache/parser")
             )
@@ -148,14 +155,17 @@ def map_request_to_query(
             except json.JSONDecodeError as exc:
                 raise ValueError(f"LLM Parser JSON 파싱 실패: {exc}") from exc
             query_generated = True
-            cache_source = "llm"
+            if cache_source == "llm_error":
+                cache_source = "llm_fallback"
+            else:
+                cache_source = "llm"
 
     if validate_schema:
         schema = query_runner.load_schema()
         query_runner.validate_query(query_obj, schema)
     if use_cache and query_generated and query_cache_key:
         _save_cache_json(QUERY_CACHE_DIR, query_cache_key, query_obj)
-    if use_cache and store_cache and query_generated:
+    if use_cache and store_cache and query_generated and llm_error is None:
         if not request_embedding:
             try:
                 embedding_client = EmbeddingClient()
@@ -183,6 +193,7 @@ def map_request_to_query(
         "embedding_error": embedding_error,
         "embedding": request_embedding,
         "parser_template": parser_template,
+        "llm_error": llm_error,
     }
     return query_obj, meta
 
@@ -337,7 +348,10 @@ def store_query_vector_cache(
     embedding: List[float],
     query_obj: Dict[str, Any],
 ) -> None:
-    _vector_cache_store(request_text, parser_model, parser_template, embedding, query_obj)
+    _vector_cache_store(
+        request_text, parser_model, parser_template, embedding, query_obj
+    )
+
 
 def run_assistant(
     request: str,
@@ -356,7 +370,9 @@ def run_assistant(
     result_cache_key: Optional[str] = None
     if use_cache:
         query_fingerprint = _canonical_json(query_obj)
-        result_cache_key = _hash_components("result", CACHE_VERSION, DATA_FINGERPRINT, query_fingerprint)
+        result_cache_key = _hash_components(
+            "result", CACHE_VERSION, DATA_FINGERPRINT, query_fingerprint
+        )
         cached_result = _load_cache_json(RESULT_CACHE_DIR, result_cache_key)
         if cached_result is not None:
             result = cached_result
@@ -392,10 +408,14 @@ def run_assistant(
             response["llm_summary"] = cached_narrative
             return response
 
-    writer_llm = LLMClient(provider=_mock_writer_provider, cache_dir=Path(".llm_cache/writer"))
+    writer_llm = LLMClient(
+        provider=_mock_writer_provider, cache_dir=Path(".llm_cache/writer")
+    )
     output_prompt = build_output_prompt(result, output_template, normalized_request)
     writer_use_cache = use_cache and writer_model != "mock-writer"
-    summary = writer_llm.call(output_prompt, model=writer_model, use_cache=writer_use_cache)
+    summary = writer_llm.call(
+        output_prompt, model=writer_model, use_cache=writer_use_cache
+    )
     response["llm_summary"] = summary
 
     if use_cache and narrative_cache_key:
@@ -411,7 +431,9 @@ def main():
     parser.add_argument("--parser-model", default="mock-parser")
     parser.add_argument("--writer-model", default="mock-writer")
     parser.add_argument("--skip-writer", action="store_true", help="결과 요약 LLM 생략")
-    parser.add_argument("--no-cache", action="store_true", help="LLM 캐시를 사용하지 않음")
+    parser.add_argument(
+        "--no-cache", action="store_true", help="LLM 캐시를 사용하지 않음"
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -436,7 +458,6 @@ def main():
         print(f"결과를 저장했습니다: {args.output}")
     else:
         print(output_json)
-
 
 
 def _mock_parser_provider(prompt: str, model: str) -> str:
@@ -487,6 +508,7 @@ def _mock_parser_provider(prompt: str, model: str) -> str:
 
 def _mock_writer_provider(prompt: str, model: str) -> str:
     return "[MOCK SUMMARY]\n요청하신 분석 결과 요약입니다."
+
 
 if __name__ == "__main__":
     main()

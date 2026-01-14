@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 from fastapi import BackgroundTasks, FastAPI, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from services.llm_mapper import dump_mapper_payload, llm_map_query
 from services.llm_narrator import (
@@ -24,10 +25,18 @@ from services.insight_builder import (
     build_insight_payload,
 )
 from tools.mcp_assistant import map_request_to_query, store_query_vector_cache
+from tools.mcp_tools import (
+    compare_domains,
+    detect_anomaly,
+    get_advanced_insight,
+    get_rankings,
+)
 
 DSN = os.getenv("MCP_DB_DSN", "postgresql://mcp:mcp@localhost:5432/mcp")
 
 app = FastAPI(title="MCP Query API")
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 def _parse_date_token(token: str) -> Optional[date]:
@@ -45,6 +54,12 @@ def _extract_date_range(text: str) -> Tuple[Optional[date], Optional[date]]:
     if not matches:
         korean = re.findall(r"(\d{4})\s*년?\s*(\d{1,2})\s*월", text)
         if not korean:
+            year_only = re.findall(r"(\d{4})\s*년", text)
+            if year_only:
+                year = int(year_only[0])
+                start = date(year, 1, 1)
+                end = date(year, 12, 31)
+                return start, end
             return None, None
         if len(korean) == 1:
             year, month = korean[0]
@@ -71,6 +86,11 @@ def _extract_spatial_key(text: str) -> Optional[str]:
 
 
 def _extract_spatial_label(text: str) -> Optional[str]:
+    prefix_match = re.search(
+        r"([가-힣]+(?:도|특별시|광역시))\s*([가-힣]+(?:시|군|구|읍|면|동))", text
+    )
+    if prefix_match:
+        return f"{prefix_match.group(1)} {prefix_match.group(2)}"
     match = re.search(r"([가-힣]+(?:시|군|구|읍|면|동))", text)
     return match.group(1) if match else None
 
@@ -449,7 +469,12 @@ def _cache_store(sql: str, params: List[Any], response: Dict[str, Any]) -> None:
                   response_json = EXCLUDED.response_json,
                   updated_at = NOW()
                 """,
-                (cache_key, sql, json.dumps(params, default=str), json.dumps(response, default=str)),
+                (
+                    cache_key,
+                    sql,
+                    json.dumps(params, default=str),
+                    json.dumps(response, default=str),
+                ),
             )
 
 
@@ -465,33 +490,82 @@ def _render_table(cols: List[str], rows: List[Tuple[Any, ...]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return """
-    <html>
-      <head>
-        <title>MCP Query</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 24px; }
-          textarea { width: 100%; height: 120px; }
-          table { border-collapse: collapse; margin-top: 16px; width: 100%; }
-          th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
-        </style>
-      </head>
-      <body>
-        <h2>MCP 자연어 질의</h2>
-        <form method="post" action="/mapping">
-          <textarea name="q" placeholder="예: 2023-08 강남구 월별 트렌드 보여줘"></textarea><br/>
-          <button type="submit">쿼리 매핑 파일 생성</button>
-        </form>
-        <h2>쿼리 매핑 JSON 입력</h2>
-        <form method="post" action="/insight_from_mapping">
-          <textarea name="mapping_json" placeholder='{"qtype":"trend","level":"sig","spatial_label":"강남구","date_start":"2023-10","date_end":"2023-10"}'></textarea><br/>
-          <button type="submit">인사이트 생성</button>
-        </form>
-      </body>
-    </html>
-    """
+def _resolve_mapping(
+    q: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    dump_path = dump_mapper_payload(q)
+    parser_model = os.getenv("MCP_PARSER_MODEL", "gemini")
+    mapping_query, meta = map_request_to_query(
+        q,
+        parser_model=parser_model,
+        return_meta=True,
+        store_cache=False,
+        validate_schema=False,
+    )
+    if (
+        background_tasks
+        and meta.get("query_generated")
+        and meta.get("embedding")
+        and meta.get("parser_template")
+    ):
+        background_tasks.add_task(
+            store_query_vector_cache,
+            q,
+            parser_model,
+            meta["parser_template"],
+            meta["embedding"],
+            mapping_query,
+        )
+    meta_public = {
+        key: value
+        for key, value in meta.items()
+        if key not in {"embedding", "parser_template"}
+    }
+    return mapping_query, meta_public, str(dump_path)
+
+
+def _resolve_spatial_label(mapping_query: Dict[str, Any], q: str) -> Optional[str]:
+    return mapping_query.get("spatial_label") or _extract_spatial_label(q)
+
+
+def _resolve_period_range(
+    mapping_query: Dict[str, Any],
+    q: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    period_from = mapping_query.get("date_start")
+    period_to = mapping_query.get("date_end")
+    if not period_from and not period_to:
+        start_date, end_date = _extract_date_range(q)
+        period_from = start_date.isoformat() if start_date else None
+        period_to = end_date.isoformat() if end_date else None
+    return period_from, period_to
+
+
+def _resolve_period_single(
+    mapping_query: Dict[str, Any],
+    q: str,
+) -> Optional[str]:
+    period = mapping_query.get("date_end") or mapping_query.get("date_start")
+    if period:
+        return _normalize_period_to_month_start(period)
+    _, end_date = _extract_date_range(q)
+    if end_date:
+        return _normalize_period_to_month_start(end_date.isoformat())
+    return None
+
+
+def _normalize_period_to_month_start(period: str) -> str:
+    parsed = _parse_date_token(period)
+    if not parsed:
+        return period
+    normalized = parsed.replace(day=1)
+    return normalized.isoformat()
+
+
+@app.get("/", response_class=FileResponse)
+def index() -> FileResponse:
+    return FileResponse("static/index.html")
 
 
 @app.post("/query", response_class=HTMLResponse)
@@ -593,6 +667,8 @@ def mapping(q: str = Form(...), background_tasks: BackgroundTasks = None) -> str
     cache_info = f"{meta.get('cache_source')}"
     if meta.get("vector_similarity") is not None:
         cache_info += f" (sim={meta.get('vector_similarity'):.3f})"
+    if meta.get("llm_error"):
+        cache_info += f"\nllm_error: {meta.get('llm_error')}"
     return f"""
     <html>
       <head>
@@ -619,7 +695,9 @@ def mapping(q: str = Form(...), background_tasks: BackgroundTasks = None) -> str
 
 
 @app.post("/mapping.json")
-def mapping_json(q: str = Form(...), background_tasks: BackgroundTasks = None) -> JSONResponse:
+def mapping_json(
+    q: str = Form(...), background_tasks: BackgroundTasks = None
+) -> JSONResponse:
     parser_model = os.getenv("MCP_PARSER_MODEL", "gemini")
     mapping_query, meta = map_request_to_query(
         q,
@@ -656,6 +734,358 @@ def mapping_json(q: str = Form(...), background_tasks: BackgroundTasks = None) -
             "dump_path": str(path),
         }
     )
+
+
+@app.post("/api/analysis/compare")
+def api_analysis_compare(
+    q: str = Form(...),
+    domains: str = Form("population,sales"),
+    level: str = Form(None),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    mapping_query, meta_public, dump_path = _resolve_mapping(q, background_tasks)
+    spatial_label = _resolve_spatial_label(mapping_query, q)
+    if not spatial_label:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_argument",
+                    "message": "spatial_label is required",
+                }
+            },
+            status_code=400,
+        )
+
+    domain_list = [d.strip() for d in domains.split(",") if d.strip()]
+    period_from, period_to = _resolve_period_range(mapping_query, q)
+    resolved_level = level or mapping_query.get("level")
+    tool_result = compare_domains(
+        spatial_label,
+        period_from,
+        period_to,
+        domain_list,
+        level=resolved_level,
+    )
+
+    return JSONResponse(
+        {
+            "request": q,
+            "mapping": mapping_query,
+            "mapping_cache": meta_public,
+            "result": tool_result,
+            "dump_path": str(dump_path),
+        }
+    )
+
+
+@app.post("/api/analysis/rankings")
+def api_analysis_rankings(
+    q: str = Form(...),
+    metric: str = Form("sales"),
+    top_k: int = Form(10),
+    level: str = Form(None),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    mapping_query, meta_public, dump_path = _resolve_mapping(q, background_tasks)
+    period = _resolve_period_single(mapping_query, q)
+    if not period:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": "period is required"}},
+            status_code=400,
+        )
+    resolved_level = level or mapping_query.get("level")
+    try:
+        tool_result = get_rankings(metric, period, top_k=top_k, level=resolved_level)
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+    return JSONResponse(
+        {
+            "request": q,
+            "mapping": mapping_query,
+            "mapping_cache": meta_public,
+            "result": tool_result,
+            "dump_path": str(dump_path),
+        }
+    )
+
+
+@app.post("/api/analysis/anomaly")
+def api_analysis_anomaly(
+    q: str = Form(...),
+    domain: str = Form("sales"),
+    z_threshold: float = Form(2.0),
+    level: str = Form(None),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    mapping_query, meta_public, dump_path = _resolve_mapping(q, background_tasks)
+    spatial_label = _resolve_spatial_label(mapping_query, q)
+    if not spatial_label:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_argument",
+                    "message": "spatial_label is required",
+                }
+            },
+            status_code=400,
+        )
+    period = _resolve_period_single(mapping_query, q)
+    if not period:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": "period is required"}},
+            status_code=400,
+        )
+    resolved_level = level or mapping_query.get("level")
+    try:
+        tool_result = detect_anomaly(
+            spatial_label, domain, period, z_threshold=z_threshold, level=resolved_level
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+    return JSONResponse(
+        {
+            "request": q,
+            "mapping": mapping_query,
+            "mapping_cache": meta_public,
+            "result": tool_result,
+            "dump_path": str(dump_path),
+        }
+    )
+
+
+@app.post("/api/analysis/advanced")
+def api_analysis_advanced(
+    q: str = Form(...),
+    domains: str = Form("population,sales"),
+    level: str = Form(None),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    mapping_query, meta_public, dump_path = _resolve_mapping(q, background_tasks)
+    spatial_label = _resolve_spatial_label(mapping_query, q)
+    if not spatial_label:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_argument",
+                    "message": "spatial_label is required",
+                }
+            },
+            status_code=400,
+        )
+    period = _resolve_period_single(mapping_query, q)
+    if not period:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": "period is required"}},
+            status_code=400,
+        )
+    resolved_level = level or mapping_query.get("level")
+    domain_list = [d.strip() for d in domains.split(",") if d.strip()]
+    try:
+        tool_result = get_advanced_insight(
+            spatial_label, domain_list, period, level=resolved_level
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+    return JSONResponse(
+        {
+            "request": q,
+            "mapping": mapping_query,
+            "mapping_cache": meta_public,
+            "result": tool_result,
+            "dump_path": str(dump_path),
+        }
+    )
+
+
+@app.post("/api/analysis/report")
+def api_analysis_report(
+    q: str = Form(...),
+    domains: str = Form("population,sales"),
+    level: str = Form(None),
+    include_summary: int = Form(1),
+    background_tasks: BackgroundTasks = None,
+) -> JSONResponse:
+    mapping_query, meta_public, dump_path = _resolve_mapping(q, background_tasks)
+    spatial_label = _resolve_spatial_label(mapping_query, q)
+    if not spatial_label:
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "invalid_argument",
+                    "message": "spatial_label is required",
+                }
+            },
+            status_code=400,
+        )
+    period_from, period_to = _resolve_period_range(mapping_query, q)
+    period = _resolve_period_single(mapping_query, q)
+    if not period_from and not period_to:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": "period is required"}},
+            status_code=400,
+        )
+    resolved_level = level or mapping_query.get("level")
+    domain_list = [d.strip() for d in domains.split(",") if d.strip()]
+
+    results = {}
+    try:
+        results["compare_domains"] = compare_domains(
+            spatial_label, period_from, period_to, domain_list, level=resolved_level
+        )
+        if period:
+            results["detect_anomaly"] = detect_anomaly(
+                spatial_label, "sales", period, level=resolved_level
+            )
+            results["get_rankings"] = get_rankings(
+                "sales", period, top_k=10, level=resolved_level
+            )
+            results["get_advanced_insight"] = get_advanced_insight(
+                spatial_label, domain_list, period, level=resolved_level
+            )
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+    summary = None
+    if include_summary:
+        summary_payload = {
+            "mapping": mapping_query,
+            "tools": results,
+        }
+        summary = llm_narrate_insight(q, summary_payload)
+
+    return JSONResponse(
+        {
+            "request": q,
+            "mapping": mapping_query,
+            "mapping_cache": meta_public,
+            "results": results,
+            "summary": summary,
+            "dump_path": str(dump_path),
+        }
+    )
+
+
+@app.post("/api/tools/compare_domains")
+def api_compare_domains(
+    region: str = Form(...),
+    period_from: str = Form(None),
+    period_to: str = Form(None),
+    domains: str = Form("population,sales"),
+    level: str = Form(None),
+) -> JSONResponse:
+    try:
+        domain_list = [d.strip() for d in domains.split(",") if d.strip()]
+        payload = compare_domains(
+            region, period_from, period_to, domain_list, level=level
+        )
+        return JSONResponse(payload)
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+
+@app.post("/api/tools/get_rankings")
+def api_get_rankings(
+    metric: str = Form(...),
+    period: str = Form(...),
+    top_k: int = Form(10),
+    level: str = Form(None),
+) -> JSONResponse:
+    try:
+        payload = get_rankings(metric, period, top_k=top_k, level=level)
+        return JSONResponse(payload)
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+
+@app.post("/api/tools/detect_anomaly")
+def api_detect_anomaly(
+    region: str = Form(...),
+    domain: str = Form(...),
+    period: str = Form(...),
+    z_threshold: float = Form(2.0),
+    level: str = Form(None),
+) -> JSONResponse:
+    try:
+        payload = detect_anomaly(
+            region, domain, period, z_threshold=z_threshold, level=level
+        )
+        return JSONResponse(payload)
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
+
+
+@app.post("/api/tools/get_advanced_insight")
+def api_get_advanced_insight(
+    region: str = Form(...),
+    period: str = Form(...),
+    domains: str = Form("population,sales"),
+    level: str = Form(None),
+) -> JSONResponse:
+    try:
+        domain_list = [d.strip() for d in domains.split(",") if d.strip()]
+        payload = get_advanced_insight(region, domain_list, period, level=level)
+        return JSONResponse(payload)
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": {"code": "invalid_argument", "message": str(exc)}},
+            status_code=400,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status_code=500
+        )
 
 
 @app.post("/query.json")
@@ -958,9 +1388,13 @@ def dataset_summary() -> str:
         with conn.cursor() as cur:
             cur.execute("SELECT MIN(date), MAX(date) FROM gold_activity")
             date_range = cur.fetchone()
-            cur.execute("SELECT COUNT(*), COUNT(DISTINCT spatial_key), COUNT(DISTINCT date) FROM gold_activity")
+            cur.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT spatial_key), COUNT(DISTINCT date) FROM gold_activity"
+            )
             totals = cur.fetchone()
-            cur.execute("SELECT date, COUNT(*) FROM gold_activity GROUP BY date ORDER BY date")
+            cur.execute(
+                "SELECT date, COUNT(*) FROM gold_activity GROUP BY date ORDER BY date"
+            )
             month_counts = cur.fetchall()
             cur.execute(
                 """
@@ -1064,7 +1498,9 @@ def dataset_summary() -> str:
         "spatial_count": int(totals[1]) if totals else 0,
         "date_count": int(totals[2]) if totals else 0,
         "month_counts": [{"date": str(r[0]), "count": r[1]} for r in month_counts],
-        "month_sources": [{"date": str(r[0]), "source": r[1], "count": r[2]} for r in month_sources],
+        "month_sources": [
+            {"date": str(r[0]), "source": r[1], "count": r[2]} for r in month_sources
+        ],
         "top_spatial": [{"label": r[0], "count": r[1]} for r in top_spatial],
         "spatial_type_counts": [{"type": r[0], "count": r[1]} for r in spatial_types],
         "top_sig": [{"name": r[0], "count": r[1]} for r in top_sig],
@@ -1072,13 +1508,19 @@ def dataset_summary() -> str:
         "sig_count": int(sig_count[0]) if sig_count else 0,
         "sido_count": int(sido_count[0]) if sido_count else 0,
         "sources": [{"source": r[0], "count": r[1]} for r in sources],
-        "sum_foot_traffic": float(totals_sum[0]) if totals_sum and totals_sum[0] is not None else 0.0,
-        "sum_sales": float(totals_sum[1]) if totals_sum and totals_sum[1] is not None else 0.0,
+        "sum_foot_traffic": float(totals_sum[0])
+        if totals_sum and totals_sum[0] is not None
+        else 0.0,
+        "sum_sales": float(totals_sum[1])
+        if totals_sum and totals_sum[1] is not None
+        else 0.0,
         "global_baseline": global_baseline,
     }
     narrative = llm_narrate_dataset(summary)
     insight_payload = build_dataset_insight_payload(total_series)
-    insight_narrative = llm_narrate_insight("전체 데이터 인사이트 요약", insight_payload)
+    insight_narrative = llm_narrate_insight(
+        "전체 데이터 인사이트 요약", insight_payload
+    )
 
     return f"""
     <html>
@@ -1112,9 +1554,13 @@ def dataset_summary_json() -> JSONResponse:
         with conn.cursor() as cur:
             cur.execute("SELECT MIN(date), MAX(date) FROM gold_activity")
             date_range = cur.fetchone()
-            cur.execute("SELECT COUNT(*), COUNT(DISTINCT spatial_key), COUNT(DISTINCT date) FROM gold_activity")
+            cur.execute(
+                "SELECT COUNT(*), COUNT(DISTINCT spatial_key), COUNT(DISTINCT date) FROM gold_activity"
+            )
             totals = cur.fetchone()
-            cur.execute("SELECT date, COUNT(*) FROM gold_activity GROUP BY date ORDER BY date")
+            cur.execute(
+                "SELECT date, COUNT(*) FROM gold_activity GROUP BY date ORDER BY date"
+            )
             month_counts = cur.fetchall()
             cur.execute(
                 """
@@ -1218,7 +1664,9 @@ def dataset_summary_json() -> JSONResponse:
         "spatial_count": int(totals[1]) if totals else 0,
         "date_count": int(totals[2]) if totals else 0,
         "month_counts": [{"date": str(r[0]), "count": r[1]} for r in month_counts],
-        "month_sources": [{"date": str(r[0]), "source": r[1], "count": r[2]} for r in month_sources],
+        "month_sources": [
+            {"date": str(r[0]), "source": r[1], "count": r[2]} for r in month_sources
+        ],
         "top_spatial": [{"label": r[0], "count": r[1]} for r in top_spatial],
         "spatial_type_counts": [{"type": r[0], "count": r[1]} for r in spatial_types],
         "top_sig": [{"name": r[0], "count": r[1]} for r in top_sig],
@@ -1226,8 +1674,12 @@ def dataset_summary_json() -> JSONResponse:
         "sig_count": int(sig_count[0]) if sig_count else 0,
         "sido_count": int(sido_count[0]) if sido_count else 0,
         "sources": [{"source": r[0], "count": r[1]} for r in sources],
-        "sum_foot_traffic": float(totals_sum[0]) if totals_sum and totals_sum[0] is not None else 0.0,
-        "sum_sales": float(totals_sum[1]) if totals_sum and totals_sum[1] is not None else 0.0,
+        "sum_foot_traffic": float(totals_sum[0])
+        if totals_sum and totals_sum[0] is not None
+        else 0.0,
+        "sum_sales": float(totals_sum[1])
+        if totals_sum and totals_sum[1] is not None
+        else 0.0,
         "global_baseline": global_baseline,
         "insight_payload": insight_payload,
         "insight_narrative": llm_narrate_insight(
@@ -1236,22 +1688,37 @@ def dataset_summary_json() -> JSONResponse:
         ),
         "narrative": llm_narrate_dataset(
             {
-                "date_min": str(date_range[0]) if date_range and date_range[0] else None,
-                "date_max": str(date_range[1]) if date_range and date_range[1] else None,
+                "date_min": str(date_range[0])
+                if date_range and date_range[0]
+                else None,
+                "date_max": str(date_range[1])
+                if date_range and date_range[1]
+                else None,
                 "row_count": int(totals[0]) if totals else 0,
                 "spatial_count": int(totals[1]) if totals else 0,
                 "date_count": int(totals[2]) if totals else 0,
-                "month_counts": [{"date": str(r[0]), "count": r[1]} for r in month_counts],
-                "month_sources": [{"date": str(r[0]), "source": r[1], "count": r[2]} for r in month_sources],
+                "month_counts": [
+                    {"date": str(r[0]), "count": r[1]} for r in month_counts
+                ],
+                "month_sources": [
+                    {"date": str(r[0]), "source": r[1], "count": r[2]}
+                    for r in month_sources
+                ],
                 "top_spatial": [{"label": r[0], "count": r[1]} for r in top_spatial],
-                "spatial_type_counts": [{"type": r[0], "count": r[1]} for r in spatial_types],
+                "spatial_type_counts": [
+                    {"type": r[0], "count": r[1]} for r in spatial_types
+                ],
                 "top_sig": [{"name": r[0], "count": r[1]} for r in top_sig],
                 "top_sido": [{"name": r[0], "count": r[1]} for r in top_sido],
                 "sig_count": int(sig_count[0]) if sig_count else 0,
                 "sido_count": int(sido_count[0]) if sido_count else 0,
                 "sources": [{"source": r[0], "count": r[1]} for r in sources],
-                "sum_foot_traffic": float(totals_sum[0]) if totals_sum and totals_sum[0] is not None else 0.0,
-                "sum_sales": float(totals_sum[1]) if totals_sum and totals_sum[1] is not None else 0.0,
+                "sum_foot_traffic": float(totals_sum[0])
+                if totals_sum and totals_sum[0] is not None
+                else 0.0,
+                "sum_sales": float(totals_sum[1])
+                if totals_sum and totals_sum[1] is not None
+                else 0.0,
             }
         ),
     }

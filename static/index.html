@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP - Multi-domain Comparison Platform</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MCP: Multi-domain Comparison Platform</h1>
+            <p>데이터를 분석하고 숨겨진 인사이트를 발견하세요.</p>
+        </header>
+
+        <main>
+            <div class="form-container">
+                <h2>분석 조건</h2>
+                <form id="analysis-form">
+                    <div class="form-group">
+                        <label for="region">지역</label>
+                        <input type="text" id="region" name="region" placeholder="예: 강남구" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="start-date">분석 시작일</label>
+                        <input type="date" id="start-date" name="start-date">
+                    </div>
+                    <div class="form-group">
+                        <label for="end-date">분석 종료일</label>
+                        <input type="date" id="end-date">
+                    </div>
+                    <div class="form-group">
+                        <label>도메인</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="domains" value="population" checked> 인구</label>
+                            <label><input type="checkbox" name="domains" value="sales" checked> 매출</label>
+                            <label><input type="checkbox" name="domains" value="telco"> 통신</label>
+                        </div>
+                    </div>
+                    <button type="submit">분석 실행</button>
+                </form>
+            </div>
+
+            <div id="results-container" class="results-container hidden">
+                <h2>분석 결과</h2>
+                <div id="loading" class="hidden">
+                    <div class="spinner"></div>
+                    <p>분석 중입니다... (최대 1분 소요)</p>
+                </div>
+                <div id="error" class="error-message hidden"></div>
+                <div id="results-content">
+                    <h3>요약</h3>
+                    <pre id="summary"></pre>
+                    <h3>상세 결과</h3>
+                    <div id="details"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

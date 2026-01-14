@@ -57,7 +57,10 @@ class CSVLoader:
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 frames = list(executor.map(_read_csv_task, tasks))
         else:
-            frames = [self.load(path, sep=sep, encoding=encoding, **kwargs) for path in file_list]
+            frames = [
+                self.load(path, sep=sep, encoding=encoding, **kwargs)
+                for path in file_list
+            ]
         return pd.concat(frames, ignore_index=True, copy=False)
 
     def load_many_chunks(
@@ -110,7 +113,9 @@ class CSVLoader:
 
         files = sorted(path_obj.rglob(pattern) if recursive else path_obj.glob(pattern))
         if not files:
-            raise FileNotFoundError(f"No CSV files matching pattern '{pattern}' in {directory}")
+            raise FileNotFoundError(
+                f"No CSV files matching pattern '{pattern}' in {directory}"
+            )
         return self.load_many(files, **kwargs)
 
     def _detect_delimiter(self, path: Path, encoding: str) -> str:

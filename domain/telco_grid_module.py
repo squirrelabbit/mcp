@@ -26,17 +26,25 @@ class TelcoGridDomainModule(BaseDomainModule):
 
         coord_x_col = self.schema.get("coord_x_column")
         coord_y_col = self.schema.get("coord_y_column")
-        coord_x_series = df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
-        coord_y_series = df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+        coord_x_series = (
+            df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
+        )
+        coord_y_series = (
+            df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+        )
 
         spatial_keys = self._resolve_spatial_series(
             df[self.schema["spatial_column"]], coord_x_series, coord_y_series
         )
         month_col = self.schema.get("month_column")
         month_series = df[month_col] if month_col and month_col in df.columns else None
-        time_keys = self._format_time_series(df[self.schema["date_column"]], month_series)
+        time_keys = self._format_time_series(
+            df[self.schema["date_column"]], month_series
+        )
 
-        aggregated = self._aggregate_by_axes(spatial_keys, time_keys, numeric_male, numeric_female)
+        aggregated = self._aggregate_by_axes(
+            spatial_keys, time_keys, numeric_male, numeric_female
+        )
         normalized: List[dict] = []
         for (spatial_key, time_key), male_demo, female_demo in aggregated:
             male_total = sum(male_demo.values())
@@ -48,7 +56,9 @@ class TelcoGridDomainModule(BaseDomainModule):
                     "female_by_age": female_demo,
                 },
             }
-            record = self.build_record(spatial_key=spatial_key, time_key=time_key, population=population)
+            record = self.build_record(
+                spatial_key=spatial_key, time_key=time_key, population=population
+            )
             normalized.append(record)
         return normalized
 
@@ -85,17 +95,28 @@ class TelcoGridDomainModule(BaseDomainModule):
 
             coord_x_col = self.schema.get("coord_x_column")
             coord_y_col = self.schema.get("coord_y_column")
-            coord_x_series = df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
-            coord_y_series = df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+            coord_x_series = (
+                df[coord_x_col] if coord_x_col and coord_x_col in df.columns else None
+            )
+            coord_y_series = (
+                df[coord_y_col] if coord_y_col and coord_y_col in df.columns else None
+            )
 
             spatial_keys = self._resolve_spatial_series(
                 df[self.schema["spatial_column"]], coord_x_series, coord_y_series
             )
             month_col = self.schema.get("month_column")
-            month_series = df[month_col] if month_col and month_col in df.columns else None
-            time_keys = self._format_time_series(df[self.schema["date_column"]], month_series)
+            month_series = (
+                df[month_col] if month_col and month_col in df.columns else None
+            )
+            time_keys = self._format_time_series(
+                df[self.schema["date_column"]], month_series
+            )
 
-            for (spatial_key, time_key), male_demo, female_demo in self._aggregate_by_axes(
+            for (
+                spatial_key,
+                time_key,
+            ), male_demo, female_demo in self._aggregate_by_axes(
                 spatial_keys, time_keys, numeric_male, numeric_female
             ):
                 key = (spatial_key, time_key)
@@ -107,12 +128,16 @@ class TelcoGridDomainModule(BaseDomainModule):
                     }
                     continue
                 for age_key, value in male_demo.items():
-                    bucket["male"][age_key] = bucket["male"].get(age_key, 0.0) + float(value)
+                    bucket["male"][age_key] = bucket["male"].get(age_key, 0.0) + float(
+                        value
+                    )
                 for age_key, value in female_demo.items():
-                    bucket["female"][age_key] = bucket["female"].get(age_key, 0.0) + float(value)
+                    bucket["female"][age_key] = bucket["female"].get(
+                        age_key, 0.0
+                    ) + float(value)
 
         normalized: List[dict] = []
-        for (spatial_key, time_key) in sorted(aggregated.keys()):
+        for spatial_key, time_key in sorted(aggregated.keys()):
             bucket = aggregated[(spatial_key, time_key)]
             male_demo = bucket["male"]
             female_demo = bucket["female"]
@@ -125,7 +150,9 @@ class TelcoGridDomainModule(BaseDomainModule):
                     "female_by_age": female_demo,
                 },
             }
-            record = self.build_record(spatial_key=spatial_key, time_key=time_key, population=population)
+            record = self.build_record(
+                spatial_key=spatial_key, time_key=time_key, population=population
+            )
             normalized.append(record)
         return normalized
 
@@ -164,7 +191,9 @@ class TelcoGridDomainModule(BaseDomainModule):
 
     def _group_sum(self, meta: pd.DataFrame, values: pd.DataFrame) -> pd.DataFrame:
         if values.empty:
-            empty_index = pd.MultiIndex(levels=[[], []], codes=[[], []], names=["spatial", "time"])
+            empty_index = pd.MultiIndex(
+                levels=[[], []], codes=[[], []], names=["spatial", "time"]
+            )
             return pd.DataFrame(index=empty_index)
         df = pd.concat([meta[["spatial", "time"]], values], axis=1)
         grouped = df.groupby(["spatial", "time"]).sum()
@@ -199,17 +228,23 @@ class TelcoGridDomainModule(BaseDomainModule):
     ) -> List[str]:
         cleaned_codes = codes.fillna("").astype(str).str.strip().replace("nan", "")
         lon_values = (
-            pd.to_numeric(coord_x, errors="coerce").tolist() if coord_x is not None else [None] * len(cleaned_codes)
+            pd.to_numeric(coord_x, errors="coerce").tolist()
+            if coord_x is not None
+            else [None] * len(cleaned_codes)
         )
         lat_values = (
-            pd.to_numeric(coord_y, errors="coerce").tolist() if coord_y is not None else [None] * len(cleaned_codes)
+            pd.to_numeric(coord_y, errors="coerce").tolist()
+            if coord_y is not None
+            else [None] * len(cleaned_codes)
         )
         result: List[str] = []
         for code, lon, lat in zip(cleaned_codes.tolist(), lon_values, lat_values):
             result.append(self._format_spatial_label(code, lon, lat))
         return result
 
-    def _format_spatial_label(self, code: str, lon: Optional[float], lat: Optional[float]) -> str:
+    def _format_spatial_label(
+        self, code: str, lon: Optional[float], lat: Optional[float]
+    ) -> str:
         has_coords = lon is not None and lat is not None
         coord_label = f"{lat:.5f},{lon:.5f}" if has_coords else ""
         if coord_label and code:
@@ -218,7 +253,9 @@ class TelcoGridDomainModule(BaseDomainModule):
             return coord_label
         return code
 
-    def _format_time_series(self, day_series: pd.Series, month_series: Optional[pd.Series]) -> List[str]:
+    def _format_time_series(
+        self, day_series: pd.Series, month_series: Optional[pd.Series]
+    ) -> List[str]:
         day_str = (
             day_series.fillna("")
             .astype(str)
@@ -227,7 +264,14 @@ class TelcoGridDomainModule(BaseDomainModule):
             .str.strip()
         )
         valid_day = day_str.str.match(r"^\d{8}$")
-        day_formatted = day_str.where(~valid_day, day_str.str.slice(0, 4) + "-" + day_str.str.slice(4, 6) + "-" + day_str.str.slice(6, 8))
+        day_formatted = day_str.where(
+            ~valid_day,
+            day_str.str.slice(0, 4)
+            + "-"
+            + day_str.str.slice(4, 6)
+            + "-"
+            + day_str.str.slice(6, 8),
+        )
 
         if month_series is not None:
             month_str = (
@@ -239,7 +283,8 @@ class TelcoGridDomainModule(BaseDomainModule):
             )
             valid_month = month_str.str.match(r"^\d{6}$")
             month_formatted = month_str.where(
-                ~valid_month, month_str.str.slice(0, 4) + "-" + month_str.str.slice(4, 6) + "-01"
+                ~valid_month,
+                month_str.str.slice(0, 4) + "-" + month_str.str.slice(4, 6) + "-01",
             )
         else:
             month_formatted = pd.Series([""] * len(day_series))
